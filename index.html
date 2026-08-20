@@ -1,0 +1,2577 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>理货管家 · 供应商包裹产品理货与毛利核算</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --surface: #ffffff;
+    --surface-2: #f8fafc;
+    --text: #1f2933;
+    --muted: #515b66;
+    --border: #e3e8ef;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --primary-soft: #eaf1ff;
+    --danger: #dc2626;
+    --danger-soft: #fdecec;
+    --danger-text: #b91c1c;
+    --focus-ring: #1d4ed8;
+    --profit: #15803d;
+    --loss: #dc2626;
+    --warn: #b45309;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(16,24,40,.08), 0 1px 2px rgba(16,24,40,.04);
+    --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 16px; --fs-lg: 20px; --fs-xl: 24px; --fs-2xl: 32px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--primary); }
+  button { font-family: inherit; cursor: pointer; }
+  button:focus-visible, input:focus-visible, select:focus-visible, .toggle:focus-visible {
+    outline: 3px solid var(--focus-ring); outline-offset: 2px;
+  }
+
+  .app-header {
+    position: sticky; top: 0; z-index: 20;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  }
+  .app-header h1 { font-size: 20px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .app-header .logo { font-size: 22px; }
+  .toolbar { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn {
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); padding: 8px 13px; border-radius: 9px;
+    font-size: 14px; font-weight: 600; transition: background .15s, border-color .15s;
+  }
+  .btn:hover { background: var(--surface-2); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn.primary:hover { background: var(--primary-hover); }
+  .btn.danger { color: var(--danger-text); border-color: #f2c4c4; background: var(--danger-soft); }
+  .btn.danger:hover { background: #f9dada; }
+  .btn.ghost { background: transparent; }
+
+  .info-banner {
+    margin: 14px 20px 0; padding: 10px 14px;
+    background: var(--primary-soft); border: 1px solid #cfe0ff;
+    border-radius: 10px; font-size: 13px; color: #1e40af;
+  }
+  .info-banner b { color: #1d4ed8; }
+  .sync-bar { margin: 10px 20px 0; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .sync-status { display: inline-flex; align-items: center; gap: 6px; }
+  .sync-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; }
+  .sync-status.ok::before { background: #16a34a; }
+  .sync-status.warn::before { background: #d97706; }
+  .scan-in { margin: 14px 0 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
+  .scan-in-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .scan-in-label { font-weight: 700; font-size: 14px; color: var(--text); white-space: nowrap; }
+  .scan-in-input { flex: 1 1 240px; padding: 11px 13px; border: 1.5px solid var(--primary); border-radius: 9px; font-size: 16px; letter-spacing: 1px; color: var(--text); background: #fff; }
+  .scan-in-input:focus { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+  .scan-global { margin: 12px 20px 0; }
+  .scan-result { margin-top: 10px; }
+  .scan-card { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+  .scan-card + .scan-card { margin-top: 8px; }
+  .scan-card .sc-name { font-weight: 700; font-size: 16px; }
+  .scan-card .sc-meta { font-size: 13px; color: var(--muted); }
+  .scan-stepper { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .scan-stepper input { width: 72px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 16px; text-align: center; }
+  .scan-empty { font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .scan-empty select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; max-width: 100%; }
+  .scan-dup { color: var(--warn); font-size: 12px; margin-top: 4px; display: none; }
+
+  .summary {
+    margin: 14px 20px 0;
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .stat-card .label { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .stat-card .value { font-size: 24px; font-weight: 700; letter-spacing: -.3px; }
+  .stat-card.accent .value { color: var(--primary); }
+  .stat-card.profit .value { color: var(--profit); }
+  .stat-card .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  main { padding: 16px 20px 60px; }
+  .empty-state {
+    text-align: center; padding: 60px 20px; color: var(--muted);
+    background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius);
+  }
+  .empty-state .big { font-size: 17px; color: var(--text); margin-bottom: 8px; }
+
+  .store {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 14px; overflow: hidden;
+  }
+  .store-head, .pkg-head {
+    display: flex; align-items: center; gap: 10px; padding: 13px 16px; flex-wrap: wrap;
+  }
+  .store-head { background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .toggle {
+    border: none; background: transparent; font-size: 16px; color: var(--muted);
+    width: 28px; height: 28px; border-radius: 6px; line-height: 1;
+  }
+  .toggle:hover { background: #e9eef5; color: var(--text); }
+  .store-title { font-size: 16px; font-weight: 700; margin: 0; }
+  .pkg-title { font-size: 14px; font-weight: 700; margin: 0; }
+  .store-meta, .pkg-meta { font-size: 13px; color: var(--muted); }
+  .store-actions, .pkg-actions, .row-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .store-actions .btn, .pkg-actions .btn, .row-actions .btn { padding: 6px 10px; font-size: 13px; }
+
+  .store-body { padding: 6px 16px 14px; }
+  .package { border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; overflow: hidden; }
+  .pkg-head { background: #fbfcfe; }
+  .pkg-body { padding: 12px 14px; }
+  .pkg-subtotal {
+    margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
+    font-size: 13px; color: var(--muted); display: flex; gap: 16px; flex-wrap: wrap;
+  }
+  .pkg-subtotal b { color: var(--text); }
+  .pkg-empty { font-size: 13px; color: var(--muted); padding: 8px 0; }
+
+  .products {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  }
+  .product {
+    display: flex; gap: 11px; padding: 10px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--surface);
+  }
+  .prod-img { width: 60px; height: 60px; flex: 0 0 60px; border-radius: 8px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); }
+  .prod-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .prod-img .no-img { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); }
+  .prod-info { flex: 1; min-width: 0; }
+  .prod-name { font-weight: 700; font-size: 14px; word-break: break-word; }
+  .prod-nums { font-size: 13px; color: var(--muted); margin: 2px 0; }
+  .prod-cost { font-size: 13px; }
+  .prod-profit { font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .prod-profit.up { color: var(--profit); }
+  .prod-profit.down { color: var(--loss); }
+  .prod-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .prod-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+  .tag.cat { background: var(--primary-soft); border-color: #cfe0ff; color: #1d4ed8; font-weight: 600; }
+  .prod-barcode { margin-top: 6px; }
+  .prod-barcode .barcode { width: 100%; max-width: 220px; height: 52px; display: block; background: #fff; }
+  .row-actions { margin-left: 0; flex-direction: column; }
+
+  /* Modal */
+  .barcode-preview { width: 100%; max-width: 240px; height: 56px; background: #fff; padding: 6px; border-radius: 8px; border: 1px solid var(--border); }
+  .barcode-preview svg { display: block; width: 100%; height: 44px; }
+  .field select { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; font-size: 16px; background: var(--surface); color: var(--text); }
+  .field select:focus { border-color: var(--primary); }
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(15,23,42,.45);
+    display: none; align-items: flex-start; justify-content: center;
+    padding: 24px 14px; z-index: 50; overflow-y: auto;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: var(--surface); border-radius: 14px; width: 100%; max-width: 480px;
+    box-shadow: 0 20px 50px rgba(15,23,42,.3); margin: auto;
+  }
+  .modal-head { padding: 16px 18px; border-bottom: 1px solid var(--border); font-size: 16px; font-weight: 700; display: flex; align-items: center; }
+  .modal-head .close { margin-left: auto; }
+  .modal-body { padding: 16px 18px; }
+  .modal-foot { padding: 14px 18px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
+  .confirm-box { max-width: 420px; }
+  .confirm-msg { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-line; }
+  .confirm-box .modal-head { border-bottom: none; }
+  #confirmModal .btn.danger { color: #fff; background: var(--danger); border-color: var(--danger); }
+  #confirmModal .btn.danger:hover { background: #c0392b; }
+
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .field .hint { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .field input[type="text"], .field input[type="number"] {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 9px; font-size: 16px; color: var(--text); background: var(--surface);
+  }
+  .field input:focus { border-color: var(--primary); }
+  .img-pick { display: flex; align-items: center; gap: 12px; }
+  .img-preview { width: 64px; height: 64px; border-radius: 8px; border: 1px solid var(--border); overflow: hidden; background: var(--surface-2); flex: 0 0 64px; }
+  .img-preview img { width: 100%; height: 100%; object-fit: cover; }
+  .img-preview .ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); }
+
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    background: #111827; color: #fff; padding: 11px 18px; border-radius: 10px;
+    font-size: 14px; z-index: 80; opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+
+  .cam-btn { display: inline-flex; align-items: center; gap: 5px; }
+  .cam-stage { position: relative; background: #111; border-radius: 10px; overflow: hidden; aspect-ratio: 4/3; }
+  .cam-stage video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cam-hint {
+    position: absolute; inset: 0; display: grid; place-items: center; color: #fff;
+    text-align: center; padding: 14px; font-size: 13px; line-height: 1.7;
+  }
+  .cam-frame {
+    position: absolute; left: 10%; right: 10%; top: 22%; bottom: 22%;
+    border: 2px solid rgba(255,255,255,.85); border-radius: 12px;
+    box-shadow: 0 0 0 100vmax rgba(0,0,0,.28); pointer-events: none;
+  }
+  .cam-frame::after {
+    content: ""; position: absolute; left: 8%; right: 8%; top: 50%; height: 2px;
+    background: rgba(192,86,33,.9); animation: camscan 2s ease-in-out infinite;
+  }
+  @keyframes camscan { 0%,100% { top: 20%; } 50% { top: 78%; } }
+  @media (prefers-reduced-motion: reduce) { .cam-frame::after { animation: none; } }
+
+  /* ---------- 半月报 ---------- */
+  #reportView { max-width: 980px; margin: 0 auto 40px; padding: 0 14px; }
+  .rp-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 18px 0 8px; }
+  .rp-head h2 { margin: 0; font-size: 24px; }
+  .rp-sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  .rp-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .rp-month { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .rp-month input { padding: 8px 10px; border: 1.5px solid var(--border); border-radius: 8px; font-size: 14px; }
+  .rp-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 14px 0 6px; }
+  .rp-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); text-align: center; }
+  .rp-num { font-size: 32px; font-weight: 800; color: var(--primary); }
+  .rp-den { font-size: 16px; color: var(--muted); font-weight: 600; }
+  .rp-cap { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .rp-delta { font-size: 12px; margin-top: 6px; font-weight: 600; }
+  .rp-up { color: #c0392b; }
+  .rp-down { color: #2e7d32; }
+  .rp-flat { color: var(--muted); }
+  .rp-table-wrap { overflow-x: auto; margin-top: 8px; }
+  .rp-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .rp-table th, .rp-table td { padding: 8px 10px; text-align: center; border-bottom: 1px solid var(--border); }
+  .rp-table th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+  .rp-table td:first-child { text-align: left; font-weight: 500; white-space: nowrap; }
+  .rp-table tr:last-child td { border-bottom: none; }
+  .rp-table .rp-cur { font-weight: 700; color: var(--primary); }
+  .alert-bar { margin: 12px 20px 0; border: 1px solid #f5c4b3; background: #fdf3ee; border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
+  .alert-bar h3 { margin: 0 0 6px; font-size: 14px; color: #993c1d; font-weight: 600; }
+  .alert-bar .alert-sum { font-size: 13px; color: var(--text); margin-bottom: 8px; }
+  .alert-list { margin: 0; padding-left: 18px; max-height: 170px; overflow: auto; }
+  .alert-list li { font-size: 13px; margin: 3px 0; }
+  .alert-tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 6px; border-radius: 6px; margin-left: 6px; }
+  .alert-low { background: #e6f1fb; color: #185fa5; }
+  .alert-near { background: #faedda; color: #854f0b; }
+  .alert-exp { background: #fcebeb; color: #a32d2d; }
+  .prod-alerts { margin-top: 4px; }
+  .alert-bar-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+  .alert-bar-head h3 { margin: 0; }
+  .clr-list { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+  .clr-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
+  .clr-name { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .clr-meta { font-size: 13px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
+  .prc-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 14px 0 6px; }
+  .prc-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); text-align: center; }
+  .prc-num { font-size: 24px; font-weight: 800; color: var(--primary); }
+  .prc-cap { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .prc-group { margin-top: 16px; }
+  .prc-group h4 { margin: 0 0 8px; font-size: 14px; }
+  @media (max-width: 560px) { .prc-cards { grid-template-columns: 1fr; } }
+  .qv-rank { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--primary-soft, #e6f1fb); color: var(--primary); }
+  .qv-rank.top { background: #faedda; color: #854f0b; }
+  .qv-meta-line { font-size: 13px; color: var(--muted); margin: 6px 0; line-height: 1.7; }
+  .qv-tip { margin-top: 6px; font-size: 13px; }
+  #quarterSelect { padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: var(--surface); color: var(--text); max-width: 190px; }
+  @media (max-width: 560px) { .alert-bar { margin-left: 14px; margin-right: 14px; } }
+  #reportView h3 { margin: 22px 0 10px; font-size: 17px; border-left: 4px solid var(--primary); padding-left: 10px; }
+  #reportView h4 { margin: 16px 0 8px; font-size: 14px; color: var(--text); }
+  .rp-note, .rp-muted { color: var(--muted); font-size: 12px; }
+  .rp-empty { color: var(--muted); padding: 14px; background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius); }
+  .rp-freq-list { display: flex; flex-direction: column; gap: 8px; }
+  .rp-freq { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+  .rp-freq-main { display: flex; align-items: center; gap: 8px; }
+  .rp-freq-name { font-weight: 700; }
+  .rp-tag { font-size: 12px; background: #eef2ff; color: #4338ca; padding: 2px 8px; border-radius: 999px; }
+  .rp-freq-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .rp-phase { color: var(--profit); font-weight: 700; }
+  .rp-bartrack { background: #eef0f4; border-radius: 6px; height: 10px; overflow: hidden; margin: 6px 0; }
+  .rp-barfill { background: linear-gradient(90deg, #6366f1, #22c55e); height: 100%; }
+  .rp-bars { display: flex; flex-direction: column; gap: 7px; }
+  .rp-barrow { display: grid; grid-template-columns: 220px 1fr 160px; align-items: center; gap: 10px; }
+  .rp-barlabel { font-size: 13px; }
+  .rp-barval { font-size: 12px; color: var(--muted); text-align: right; }
+  .rp-two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .rp-list { margin: 0; padding-left: 18px; max-height: 240px; overflow: auto; }
+  .rp-list li { font-size: 13px; margin: 3px 0; }
+  .rp-trend { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .rp-trend-col { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-size: 13px; line-height: 1.6; }
+  .rp-tips { margin: 0; padding-left: 20px; }
+  .rp-tips li { margin: 6px 0; font-size: 14px; line-height: 1.6; }
+  @media (max-width: 720px) {
+    .rp-cards { grid-template-columns: repeat(2, 1fr); }
+    .rp-barrow { grid-template-columns: 110px 1fr 92px; }
+    .rp-two, .rp-trend { grid-template-columns: 1fr; }
+  }
+
+  .bottom-nav { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: var(--surface); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 0 9px; font-size: 12px; color: var(--muted); background: none; border: none; cursor: pointer; }
+  .nav-item .ni-ic { font-size: 19px; line-height: 1.2; }
+  .nav-item.active { color: var(--primary); font-weight: 600; }
+  .more-panel { display: none; position: fixed; left: 10px; right: 10px; bottom: calc(64px + env(safe-area-inset-bottom, 0px)); z-index: 45; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px; box-shadow: 0 10px 30px rgba(15,23,42,.18); grid-template-columns: 1fr 1fr; gap: 8px; }
+  .more-panel .btn { margin: 0; }
+
+  @media (max-width: 560px) {
+    .app-header { padding: 12px 14px; }
+    .toolbar { display: none; }
+    .summary, main, .info-banner, .sync-bar { margin-left: 14px; margin-right: 14px; }
+    .products { grid-template-columns: 1fr; }
+    .store-actions, .pkg-actions { width: 100%; margin-left: 0; }
+    body { padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)); }
+    .bottom-nav { display: flex; }
+    .more-panel.open { display: grid; }
+  }
+
+  /* 数字等宽，对齐滚动时金额不抖动 */
+  .rp-num, .stat-card .value, .prod-nums, .rp-table td, .prod-cost, .prc-num { font-variant-numeric: tabular-nums; }
+  .ni-ic { display: inline-flex; }
+
+  /* 触控屏：最小 44px 触控目标 */
+  @media (hover: none) {
+    .btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+    .nav-item { min-height: 48px; }
+  }
+  /* 320px 极限小屏：关键卡组单列 */
+  @media (max-width: 400px) {
+    .rp-cards, .prc-cards, .summary { grid-template-columns: 1fr; }
+  }
+
+  /* 深色模式（跟随系统 prefers-color-scheme） */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --surface: #1e293b; --surface-2: #273244;
+      --text: #e2e8f0; --muted: #94a3b8; --border: #334155;
+      --primary: #60a5fa; --primary-hover: #3b82f6; --primary-soft: #1e3a5f;
+      --danger: #f87171; --danger-soft: #3b1d1d; --danger-text: #fca5a5;
+      --profit: #4ade80; --loss: #f87171; --warn: #fbbf24; --focus-ring: #93c5fd;
+      --shadow: 0 1px 3px rgba(0,0,0,.45);
+    }
+    .scan-in-input { background: #0f172a; }
+    .pkg-head { background: #233043; }
+    .info-banner { background: #1e3a5f; border-color: #1d4ed8; color: #bfdbfe; }
+    .info-banner b { color: #93c5fd; }
+    .rp-bartrack { background: #334155; }
+    .rp-table th { background: #273244; }
+    .alert-bar { background: #2d1a10; border-color: #92400e; }
+    .alert-bar h3 { color: #fdba74; }
+    .alert-low { background: #0f2f52; color: #7cc4ff; }
+    .alert-near { background: #3a2a0e; color: #fbbf24; }
+    .alert-exp { background: #3b1414; color: #fca5a5; }
+    .tag.cat { background: #1e3a5f; border-color: #1d4ed8; color: #93c5fd; }
+    .qv-rank.top { background: #3a2a0e; color: #fbbf24; }
+    .rp-tag { background: #2e2a5c; color: #c7d2fe; }
+    .rp-up { color: #f87171; }
+    .rp-down { color: #4ade80; }
+    .toast { background: #0b1220; border: 1px solid #334155; }
+    #confirmModal .btn.danger { background: #dc2626; border-color: #dc2626; }
+  }
+</style>
+</head>
+<body>
+  <header class="app-header">
+    <h1><span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/></svg></span> 理货管家</h1>
+    <div class="toolbar">
+      <button class="btn primary" data-action="add-store">+ 新增供应商</button>
+      <button class="btn" data-action="export-xlsx">导出 Excel</button>
+      <button class="btn" data-action="export-csv">导出 CSV</button>
+      <button class="btn" data-action="import-file">导入</button>
+      <button class="btn" data-action="export-json">导出备份</button>
+      <button class="btn" data-action="alert-settings">预警设置</button>
+      <button class="btn" data-action="report">📊 半月报</button>
+      <button class="btn" data-action="clearance">🧹 清仓清单</button>
+      <button class="btn" data-action="procure">🛒 采购清单</button>
+      <button class="btn" data-action="quarter">🗓 季度复盘</button>
+      <button class="btn" data-action="sync-now">同步</button>
+      <button class="btn" id="authBtn" data-action="auth">登录同步</button>
+    </div>
+  </header>
+
+  <div class="sync-bar">
+    <span id="syncStatus" class="sync-status warn">未配置同步</span>
+  </div>
+
+  <div class="info-banner">
+    <b>运费分摊规则：</b>每个包裹的物流费用，按「包裹内总件数」平摊到每件产品。单件成本 = 进货单价 + 运费 ÷ 总件数；单件毛利 = 零售价 − 单件成本。
+  </div>
+
+  <section class="summary" id="summary" aria-label="汇总统计"></section>
+
+  <section id="alertBar" class="alert-bar" hidden aria-label="库存预警与临期提示"></section>
+
+  <section id="globalScan" class="scan-in scan-global" aria-label="全局扫码入库">
+    <div class="scan-in-row">
+      <span class="scan-in-label">扫码入库</span>
+      <input type="text" id="globalScanInput" class="scan-in-input" placeholder="扫一维码即可入库，自动匹配同码产品，无需先选包裹" autocomplete="off" />
+      <button class="btn cam-btn" data-action="scan-camera" data-pkg="__global__" title="相机扫码" aria-label="相机扫码"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>相机</button>
+      <button class="btn" data-action="scan-clear" data-pkg="__global__">清空</button>
+    </div>
+    <div class="scan-result" id="scanResult-__global__"></div>
+  </section>
+
+  <main id="storeList"></main>
+
+  <section id="reportView" hidden aria-label="半月报分析"></section>
+
+  <section id="clearanceView" hidden aria-label="临期清仓清单"></section>
+
+  <section id="procureView" hidden aria-label="采购清单"></section>
+
+  <section id="quarterView" hidden aria-label="供应商季度复盘"></section>
+
+  <input type="file" id="importInput" accept=".json,.xlsx,.xls,.csv" style="display:none" />
+
+  <!-- Modal -->
+  <div class="modal-overlay" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-box">
+      <div class="modal-head"><span id="modalTitle">标题</span>
+        <button class="btn ghost close" id="modalClose" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-foot">
+        <button class="btn" id="modalCancel">取消</button>
+        <button class="btn primary" id="modalSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 确认弹窗（替代原生 confirm） -->
+  <div class="modal-overlay" id="confirmModal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMsg">
+    <div class="modal-box confirm-box">
+      <div class="modal-head"><span id="confirmTitle">确认</span></div>
+      <div class="modal-body"><p id="confirmMsg" class="confirm-msg"></p></div>
+      <div class="modal-foot">
+        <button class="btn" id="confirmCancel">取消</button>
+        <button class="btn danger" id="confirmOk">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="cameraModal" role="dialog" aria-modal="true" aria-labelledby="cameraTitle">
+    <div class="modal-box" style="max-width:420px">
+      <div class="modal-head"><span id="cameraTitle">📷 相机扫码</span>
+        <button class="btn ghost close" id="cameraClose" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="cam-stage">
+          <video id="camVideo" autoplay playsinline muted></video>
+          <div id="camHint" class="cam-hint">正在启动摄像头…</div>
+          <div id="camFrame" class="cam-frame" aria-hidden="true"></div>
+        </div>
+        <p class="rp-note" style="margin-top:8px">把一维码 / 二维码对准取景框，识别成功后自动填入并入库。请允许摄像头权限。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <nav id="bottomNav" class="bottom-nav" aria-label="底部导航">
+    <button class="nav-item" data-action="nav-home" data-nav="home" aria-label="理货"><span class="ni-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/></svg></span><span>理货</span></button>
+    <button class="nav-item" data-action="report" data-nav="report" aria-label="半月报"><span class="ni-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></span><span>半月报</span></button>
+    <button class="nav-item" data-action="clearance" data-nav="clearance" aria-label="清仓清单"><span class="ni-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg></span><span>清仓</span></button>
+    <button class="nav-item" data-action="procure" data-nav="procure" aria-label="采购清单"><span class="ni-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/></svg></span><span>采购</span></button>
+    <button class="nav-item" data-action="nav-more" aria-label="更多"><span class="ni-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span>更多</span></button>
+  </nav>
+  <div id="morePanel" class="more-panel" aria-label="更多操作">
+    <button class="btn primary" data-action="add-store">+ 新增供应商</button>
+    <button class="btn" data-action="export-xlsx">导出 Excel</button>
+    <button class="btn" data-action="export-csv">导出 CSV</button>
+    <button class="btn" data-action="import-file">导入</button>
+    <button class="btn" data-action="export-json">导出备份</button>
+    <button class="btn" data-action="alert-settings">预警设置</button>
+    <button class="btn" data-action="quarter">🗓 季度复盘</button>
+    <button class="btn" data-action="sync-now">同步</button>
+    <button class="btn" id="authBtn2" data-action="auth">登录同步</button>
+  </div>
+
+<script>
+"use strict";
+/* ---------- 存储层 (IndexedDB 本地 + Supabase 云端) ---------- */
+const DB_NAME = "lh_db", STORE = "data", KEY = "app";
+function openDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(STORE)) r.result.createObjectStore(STORE); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function loadLocal() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, "readonly");
+    const req = tx.objectStore(STORE).get(KEY);
+    req.onsuccess = () => res(req.result || { stores: [], packages: [], products: [] });
+    req.onerror = () => rej(req.error);
+  });
+}
+async function saveLocal() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).put(state, KEY);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+/* ---------- Supabase 云端同步 ---------- */
+const LS_SB = "lh_supabase_cfg";
+/* 内置默认配置：anon key 属公开密钥，数据安全由 RLS 策略保证；若在「同步设置」里另行保存则以用户配置为准 */
+const DEFAULT_SB = {
+  url: "https://fevesgdfzwszecrxvwms.supabase.co",
+  key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZldmVzZ2RmendzemVjcnh2d21zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxNDI3MjYsImV4cCI6MjEwMjcxODcyNn0.DLpdMfrS1IqYwxeIt--1Lhf9KiOEfuj4xLdiPhbY9co"
+};
+let sbCfg = (() => { try { return Object.assign({}, DEFAULT_SB, JSON.parse(localStorage.getItem(LS_SB) || "{}")); } catch (e) { return Object.assign({}, DEFAULT_SB); } })();
+let sbClient = null;
+
+/* ---------- 预警配置与计算 ---------- */
+const LS_ALERT = "lh_alert_cfg";
+let alertCfg = (() => { try { return Object.assign({ lowStock: 5, nearExpiryDays: 30, clearanceDiscount: 0.7, procureMultiplier: 2 }, JSON.parse(localStorage.getItem(LS_ALERT) || "{}")); } catch (e) { return { lowStock: 5, nearExpiryDays: 30, clearanceDiscount: 0.7, procureMultiplier: 2 }; } })();
+function foldText(d) {
+  const f = Math.round(Number(d) * 100) / 10;
+  return (f % 1 === 0 ? String(f) : f.toFixed(1)) + "折";
+}
+function daysUntilExpiry(expiry) {
+  if (!expiry) return null;
+  const d = new Date(expiry + "T00:00:00");
+  if (isNaN(d.getTime())) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((d - today) / 86400000);
+}
+function productAlerts(p) {
+  const out = [];
+  const q = Number(p.quantity) || 0;
+  const ls = Number(alertCfg.lowStock);
+  if (!isNaN(ls) && ls >= 0 && q <= ls) out.push({ cls: "alert-low", text: "低库存 " + q });
+  const d = daysUntilExpiry(p.expiry);
+  if (d !== null) {
+    if (d < 0) out.push({ cls: "alert-exp", text: "已过期 " + Math.abs(d) + "天" });
+    else { const ne = Number(alertCfg.nearExpiryDays); if (!isNaN(ne) && ne >= 0 && d <= ne) out.push({ cls: "alert-near", text: "临期 " + d + "天" }); }
+  }
+  return out;
+}
+function renderAlerts() {
+  const bar = document.getElementById("alertBar");
+  if (!bar) return;
+  const items = state.products.map(p => ({ p, a: productAlerts(p) })).filter(x => x.a.length);
+  if (items.length === 0) { bar.hidden = true; bar.innerHTML = ""; return; }
+  const low = items.filter(x => x.a.some(t => t.cls === "alert-low")).length;
+  const near = items.filter(x => x.a.some(t => t.cls === "alert-near")).length;
+  const exp = items.filter(x => x.a.some(t => t.cls === "alert-exp")).length;
+  const rowsHtml = items.slice(0, 50).map(x => `<li>${esc(x.p.name || "未命名产品")}<span class="prod-alerts">${x.a.map(t => `<span class="alert-tag ${t.cls}">${t.text}</span>`).join("")}</span></li>`).join("")
+    + (items.length > 50 ? `<li class="rp-muted">…还有 ${items.length - 50} 个</li>` : "");
+  bar.innerHTML = `<div class="alert-bar-head"><h3>⚠ 库存预警 / 临期提示</h3><button class="btn" data-action="clearance">🧹 生成清仓清单</button></div>
+    <div class="alert-sum">低库存 <b>${low}</b> 个 · 临期 <b>${near}</b> 个 · 已过期 <b>${exp}</b> 个（阈值：库存≤${alertCfg.lowStock} 件、临期≤${alertCfg.nearExpiryDays} 天）</div>
+    <ul class="alert-list">${rowsHtml}</ul>`;
+  bar.hidden = false;
+}
+function openAlertSettings() {
+  curEdit = { type: "alert" };
+  openModal("预警设置");
+  modalBody.innerHTML =
+    field("低库存阈值（件）", "库存数量 ≤ 此值时提醒", `<input type="number" id="f-low" min="0" step="1" inputmode="numeric" value="${alertCfg.lowStock}" />`, "f-low")
+    + field("临期提前天数", "到期日距今 ≤ 此天数时提醒", `<input type="number" id="f-near" min="0" step="1" inputmode="numeric" value="${alertCfg.nearExpiryDays}" />`, "f-near")
+    + field("清仓折扣", `清仓清单「建议清仓价」= 零售价 × 折扣（当前 ${foldText(alertCfg.clearanceDiscount)}，0.7 = 7 折）`, `<input type="number" id="f-discount" min="0.05" max="1" step="0.05" inputmode="decimal" value="${alertCfg.clearanceDiscount}" />`, "f-discount")
+    + field("采购目标倍数", "采购清单「目标库存」= 低库存阈值 × 倍数（当前 ×" + alertCfg.procureMultiplier + "）", `<input type="number" id="f-multi" min="0.5" max="20" step="0.5" inputmode="decimal" value="${alertCfg.procureMultiplier}" />`, "f-multi")
+    + `<div class="field"><div class="hint">提示：产品的「到期日」可在新增 / 编辑产品时填写（食品等易过期品类建议填）；清仓折扣与采购倍数只影响建议值，可按实际调整。</div></div>`;
+  document.getElementById("f-low").focus();
+}
+function sbReady() { return !!(sbCfg.url && sbCfg.key && window.supabase); }
+function initSb() {
+  sbClient = null;
+  if (sbReady()) { try { sbClient = window.supabase.createClient(sbCfg.url, sbCfg.key); } catch (e) { sbClient = null; console.warn("Supabase 初始化失败", e); } }
+  return sbClient;
+}
+async function sbSession() { if (!sbClient) return null; try { const { data } = await sbClient.auth.getSession(); return data.session; } catch (e) { return null; } }
+async function loadRemote() {
+  if (!sbClient) return null;
+  const s = await sbSession(); if (!s) return null;
+  try {
+    const { data, error } = await sbClient.from("lh_state").select("data,updated_at").eq("id", s.user.id).maybeSingle();
+    if (error) { console.warn(error); return null; }
+    return data;
+  } catch (e) { return null; }
+}
+async function saveRemote() {
+  if (!sbClient) return false;
+  const s = await sbSession(); if (!s) return false;
+  try {
+    const { error } = await sbClient.from("lh_state").upsert({ id: s.user.id, data: state, updated_at: new Date().toISOString() });
+    if (error) { console.warn(error); return false; }
+    return true;
+  } catch (e) { return false; }
+}
+async function saveData() {
+  await saveLocal();
+  if (sbClient) { const ok = await saveRemote(); updateSyncUI(ok); }
+}
+async function updateSyncUI() {
+  const el = document.getElementById("syncStatus");
+  const btn = document.getElementById("authBtn");
+  const btn2 = document.getElementById("authBtn2");
+  if (!el || !btn) return;
+  if (!sbClient) { el.textContent = "未配置同步（点「同步设置」）"; el.className = "sync-status warn"; btn.textContent = "登录同步"; }
+  else {
+    const s = await sbSession();
+    if (!s) { el.textContent = "已连接，未登录"; el.className = "sync-status warn"; btn.textContent = "登录同步"; }
+    else {
+      const email = s.user.email || "账号";
+      el.textContent = "已同步 · " + email;
+      el.className = "sync-status ok";
+      btn.textContent = "退出(" + email.split("@")[0] + ")";
+    }
+  }
+  if (btn2) btn2.textContent = btn.textContent;
+}
+
+/* ---------- 相机扫码 ---------- */
+let camStream = null, camDetector = null, camReader = null, camTimer = null, camPid = "__global__", camLast = "";
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = resolve; s.onerror = () => reject(new Error("load fail"));
+    document.head.appendChild(s);
+  });
+}
+async function openCameraScan(pid) {
+  camPid = pid || "__global__";
+  document.getElementById("cameraModal").classList.add("open");
+  const hint = document.getElementById("camHint");
+  hint.style.display = "grid"; hint.textContent = "正在启动摄像头…";
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no getUserMedia");
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } }, audio: false });
+    const video = document.getElementById("camVideo");
+    video.srcObject = camStream;
+    await video.play();
+    hint.style.display = "none";
+    startCamDetect(video);
+  } catch (e) {
+    console.error(e);
+    hint.textContent = "无法打开摄像头：请确认已授予摄像头权限，并通过 HTTPS / 本机地址访问（file:// 不支持）。";
+  }
+}
+function startCamDetect(video) {
+  stopCamDetect();
+  if ("BarcodeDetector" in window) {
+    try {
+      camDetector = new BarcodeDetector({ formats: ["code_128","code_39","code_93","codabar","ean_13","ean_8","upc_a","upc_e","itf","qr_code","data_matrix","pdf417","aztec"] });
+      const tick = async () => {
+        if (!camStream) return;
+        try {
+          const codes = await camDetector.detect(video);
+          if (codes && codes.length && codes[0].rawValue) { onCamCode(codes[0].rawValue); return; }
+        } catch (e) {}
+        camTimer = setTimeout(tick, 160);
+      };
+      tick();
+      return;
+    } catch (e) { camDetector = null; }
+  }
+  if (window.ZXing) { startZxing(video); }
+  else {
+    const hint = document.getElementById("camHint");
+    hint.style.display = "grid"; hint.textContent = "正在加载识别引擎…";
+    loadScript("https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js")
+      .then(() => { hint.style.display = "none"; startZxing(video); })
+      .catch(() => { hint.style.display = "grid"; hint.textContent = "识别引擎加载失败，请检查网络，或使用 Chrome / Edge 浏览器（自带实时识别）。"; });
+  }
+}
+function startZxing(video) {
+  try {
+    camReader = new ZXing.BrowserMultiFormatReader();
+    camReader.decodeFromVideoElement(video, (result, err) => {
+      if (result && result.getText && result.getText()) onCamCode(result.getText());
+    });
+  } catch (e) {
+    const hint = document.getElementById("camHint");
+    hint.style.display = "grid"; hint.textContent = "识别引擎启动失败，请使用 Chrome / Edge 浏览器重试。";
+  }
+}
+function onCamCode(code) {
+  const c = String(code || "").trim();
+  if (!c || c === camLast) return;
+  camLast = c; setTimeout(() => { camLast = ""; }, 1200); /* 短去抖，避免同一码重复触发 */
+  const pid = camPid;
+  closeCameraScan();
+  const inp = document.getElementById("scanInput-" + pid);
+  if (inp) inp.value = c;
+  doScan(c, pid);
+  toast("相机识别成功：已自动入库");
+}
+function stopCamDetect() {
+  if (camTimer) { clearTimeout(camTimer); camTimer = null; }
+  if (camReader) { try { camReader.reset(); } catch (e) {} camReader = null; }
+  camDetector = null;
+}
+function closeCameraScan() {
+  stopCamDetect();
+  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  const video = document.getElementById("camVideo");
+  if (video) video.srcObject = null;
+  document.getElementById("cameraModal").classList.remove("open");
+}
+document.getElementById("cameraModal").addEventListener("click", (e) => { if (e.target && e.target.id === "cameraModal") closeCameraScan(); });
+document.getElementById("cameraClose").addEventListener("click", closeCameraScan);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCameraScan(); });
+
+/* ---------- 移动端底部导航 ---------- */
+const morePanel = document.getElementById("morePanel");
+function setNavActive(key) {
+  document.querySelectorAll(".nav-item[data-nav]").forEach(b => b.classList.toggle("active", b.dataset.nav === key));
+}
+function toggleMorePanel() { if (morePanel) morePanel.classList.toggle("open"); }
+function closeMorePanel() { if (morePanel) morePanel.classList.remove("open"); }
+
+/* ---------- 工具 ---------- */
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const money = (n) => "¥" + (Number(n) || 0).toFixed(2);
+const pct = (n) => (Number(n) * 100).toFixed(1) + "%";
+const num = (v) => { const x = parseFloat(String(v).replace(/[^\d.\-]/g, "")); return isNaN(x) ? 0 : x; };
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/* ---------- 一维码 (Code128) 渲染 ---------- */
+const CATS = ["食品", "玩具", "文具", "文创", "盲抽盲盒", "潮流"];
+const CODE128 = [
+  "212222","222122","222221","121223","121322","131222","122213","122312","132212","221213",
+  "221312","231212","112232","122132","122231","113222","123122","123221","223211","221132",
+  "221231","213212","223112","312131","311222","321122","321221","312212","322112","322211",
+  "212123","212321","232121","111323","131123","131321","112313","132113","132311","211313",
+  "231113","231311","112133","112331","132131","113123","113321","133121","313121","211331",
+  "231131","213113","213311","213131","311123","311321","331121","312113","312311","332111",
+  "314111","221411","431111","111224","111422","121124","121421","141122","141221","112214",
+  "112412","122114","122411","142112","142211","241211","221114","413111","241112","134111",
+  "111242","121142","121241","114212","124112","124211","411212","421112","421211","212141",
+  "214121","412121","111143","111341","131141","114113","114311","411113","411311","113141",
+  "114131","311141","411131","211412","211214","211232","2331112"
+];
+function code128Codes(text) {
+  text = String(text);
+  const codes = [];
+  let i = 0;
+  const startC = text.length >= 2 && /^\d\d/.test(text);
+  let set = startC ? "C" : "B";
+  codes.push(startC ? 105 : 104);
+  while (i < text.length) {
+    if (set === "C") {
+      if (i + 1 < text.length && /^\d\d$/.test(text.substr(i, 2))) {
+        codes.push(parseInt(text.substr(i, 2), 10));
+        i += 2;
+      } else { codes.push(100); set = "B"; }
+    } else {
+      const rem = text.substr(i);
+      if (/^\d{4,}/.test(rem)) { codes.push(99); set = "C"; }
+      else {
+        let c = text.charCodeAt(i);
+        if (c < 32 || c > 126) c = 32;
+        codes.push(c - 32);
+        i++;
+      }
+    }
+  }
+  let sum = codes[0];
+  for (let k = 1; k < codes.length; k++) sum += codes[k] * k;
+  codes.push(sum % 103);
+  codes.push(106);
+  return codes;
+}
+function renderBarcode(value) {
+  if (!value) return "";
+  const codes = code128Codes(value);
+  let bars = [];
+  codes.forEach(c => {
+    const pat = CODE128[c];
+    for (let j = 0; j < pat.length; j++) bars.push({ w: +pat[j], on: j % 2 === 0 });
+  });
+  const QZ = 10;
+  let x = QZ;
+  let rects = "";
+  bars.forEach(b => {
+    if (b.on) rects += `<rect x="${x}" y="0" width="${b.w}" height="38" fill="#111827"/>`;
+    x += b.w;
+  });
+  const w = x + QZ, h = 54;
+  return `<svg class="barcode" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="条码 ${esc(value)}">${rects}<text x="${w / 2}" y="${h - 3}" text-anchor="middle" font-size="11" fill="#1f2933" font-family="monospace">${esc(value)}</text></svg>`;
+}
+function catOptions(sel) {
+  let o = `<option value="">未分类</option>`;
+  CATS.forEach(c => { o += `<option value="${c}"${c === sel ? " selected" : ""}>${c}</option>`; });
+  return o;
+}
+
+/* 图片压缩：长边限制 + JPEG 重编码，高清且低储存 */
+const IMG_MAX = 1280, IMG_Q = 0.82;
+async function compressImage(file) {
+  let source, w, h;
+  if (window.createImageBitmap) {
+    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+    source = bmp; w = bmp.width; h = bmp.height;
+  } else {
+    const u = URL.createObjectURL(file);
+    const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = u; });
+    source = img; w = img.naturalWidth; h = img.naturalHeight;
+  }
+  const scale = Math.min(1, IMG_MAX / Math.max(w, h));
+  const tw = Math.max(1, Math.round(w * scale)), th = Math.max(1, Math.round(h * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = tw; canvas.height = th;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, tw, th);
+  ctx.drawImage(source, 0, 0, tw, th);
+  if (source.close) source.close();
+  return canvas.toDataURL("image/jpeg", IMG_Q);
+}
+
+/* ---------- 状态 ---------- */
+let state = { stores: [], packages: [], products: [] };
+const collapsed = new Set(); // 折叠的供应商/包裹 id
+
+/* ---------- 计算 ---------- */
+const pkgItems = (pkgId) => state.products.filter(p => p.packageId === pkgId);
+const pkgTotalQty = (pkgId) => pkgItems(pkgId).reduce((s, p) => s + (Number(p.quantity) || 0), 0);
+function perItemFee(pkg) { const n = pkgTotalQty(pkg.id); return n > 0 ? (Number(pkg.logisticsFee) || 0) / n : 0; }
+function productCost(p) {
+  const pkg = state.packages.find(x => x.id === p.packageId);
+  return (Number(p.purchasePrice) || 0) + (pkg ? perItemFee(pkg) : 0);
+}
+const productProfit = (p) => (Number(p.retailPrice) || 0) - productCost(p);
+function productMargin(p) { const rp = Number(p.retailPrice) || 0; return rp > 0 ? productProfit(p) / rp : 0; }
+
+function computeSummary() {
+  let cost = 0, fee = 0, retail = 0, qty = 0;
+  state.packages.forEach(pkg => { fee += Number(pkg.logisticsFee) || 0; });
+  state.products.forEach(p => {
+    const q = Number(p.quantity) || 0; qty += q;
+    cost += (Number(p.purchasePrice) || 0) * q;
+    retail += (Number(p.retailPrice) || 0) * q;
+  });
+  const totalCost = cost + fee;
+  const profit = retail - totalCost;
+  const margin = retail > 0 ? profit / retail : 0;
+  return { cost, fee, retail, totalCost, profit, margin, storeCount: state.stores.length, pkgCount: state.packages.length, productCount: state.products.length, qty };
+}
+
+/* ---------- 渲染 ---------- */
+function renderSummary() {
+  const s = computeSummary();
+  const sign = s.profit < 0 ? "-" : "";
+  document.getElementById("summary").innerHTML = `
+    <div class="stat-card accent"><div class="label">总进货成本</div><div class="value">${money(s.cost)}</div><div class="sub">${s.productCount} 种 · ${s.qty} 件</div></div>
+    <div class="stat-card"><div class="label">总物流费用</div><div class="value">${money(s.fee)}</div><div class="sub">${s.pkgCount} 个包裹</div></div>
+    <div class="stat-card accent"><div class="label">预计零售总额</div><div class="value">${money(s.retail)}</div><div class="sub">${s.storeCount} 个供应商</div></div>
+    <div class="stat-card profit"><div class="label">总毛利</div><div class="value">${sign}${money(Math.abs(s.profit))}</div><div class="sub">${s.profit < 0 ? "亏损" : "盈利"}</div></div>
+    <div class="stat-card profit"><div class="label">整体毛利率</div><div class="value">${pct(s.margin)}</div><div class="sub">毛利 ÷ 零售额</div></div>
+  `;
+}
+
+function renderStores() {
+  const root = document.getElementById("storeList");
+  if (state.stores.length === 0) {
+    root.innerHTML = `<div class="empty-state"><div class="big">还没有供应商</div><div>点击右上角「+ 新增供应商」开始理货吧。</div></div>`;
+    return;
+  }
+  root.innerHTML = state.stores.map(store => {
+    const pkgs = state.packages.filter(p => p.storeId === store.id);
+    const itemCount = pkgs.reduce((s, p) => s + pkgItems(p.id).length, 0);
+    const exp = !collapsed.has(store.id);
+    const pkgHtml = pkgs.length === 0
+      ? `<div class="pkg-empty">该供应商暂无包裹，点击下方「+ 包裹」添加。</div>`
+      : pkgs.map(pkg => renderPackage(pkg)).join("");
+    return `
+    <section class="store" data-id="${store.id}">
+      <div class="store-head">
+        <button class="toggle" data-action="toggle-store" data-id="${store.id}" aria-expanded="${exp}" aria-label="${exp ? "收起" : "展开"}供应商">${exp ? "▾" : "▸"}</button>
+        <h2 class="store-title">${esc(store.name)}</h2>
+        <span class="store-meta">${pkgs.length} 个包裹 · ${itemCount} 件产品</span>
+        <div class="store-actions">
+          <button class="btn" data-action="edit-store" data-id="${store.id}">编辑</button>
+          <button class="btn primary" data-action="add-package" data-id="${store.id}">+ 包裹</button>
+        </div>
+      </div>
+      ${exp ? `<div class="store-body">${pkgHtml}<div style="margin-top:10px"><button class="btn primary" data-action="add-package" data-id="${store.id}">+ 新增包裹</button></div></div>` : ""}
+    </section>`;
+  }).join("");
+}
+
+function renderPackage(pkg) {
+  const items = pkgItems(pkg.id);
+  const qty = pkgTotalQty(pkg.id);
+  const feeEach = perItemFee(pkg);
+  const exp = !collapsed.has(pkg.id);
+  const retail = items.reduce((s, p) => s + (Number(p.retailPrice) || 0) * (Number(p.quantity) || 0), 0);
+  const cost = items.reduce((s, p) => s + (Number(p.purchasePrice) || 0) * (Number(p.quantity) || 0), 0);
+  const profit = retail - cost - (Number(pkg.logisticsFee) || 0);
+  const prodHtml = items.length === 0
+    ? `<div class="pkg-empty">该包裹暂无产品。</div>`
+    : `<div class="products">${items.map(renderProduct).join("")}</div>`;
+  return `
+  <div class="package" data-id="${pkg.id}">
+    <div class="pkg-head">
+      <button class="toggle" data-action="toggle-package" data-id="${pkg.id}" aria-expanded="${exp}" aria-label="${exp ? "收起" : "展开"}包裹">${exp ? "▾" : "▸"}</button>
+      <h3 class="pkg-title">${esc(pkg.name || "未命名包裹")}</h3>
+      <span class="pkg-meta">运费 ${money(pkg.logisticsFee)} · ${qty} 件 · 每件摊 ${money(feeEach)}</span>
+      <div class="pkg-actions">
+        <button class="btn" data-action="edit-package" data-id="${pkg.id}">编辑</button>
+        <button class="btn danger" data-action="del-package" data-id="${pkg.id}">删除</button>
+        <button class="btn primary" data-action="add-product" data-id="${pkg.id}">+ 产品</button>
+      </div>
+    </div>
+    ${exp ? `<div class="pkg-body">
+      ${scanPanelHtml(pkg.id)}
+      ${prodHtml}
+      <div class="pkg-subtotal">
+        <span>进货小计 <b>${money(cost)}</b></span>
+        <span>运费 <b>${money(pkg.logisticsFee)}</b></span>
+        <span>零售小计 <b>${money(retail)}</b></span>
+        <span>包裹毛利 <b style="color:${profit < 0 ? "var(--loss)" : "var(--profit)"}">${money(profit)}</b></span>
+      </div>
+    </div>` : ""}
+  </div>`;
+}
+
+function renderProduct(p) {
+  const q = Number(p.quantity) || 0;
+  const cost = productCost(p), profit = productProfit(p), margin = productMargin(p);
+  const rp = Number(p.retailPrice) || 0;
+  const img = p.image
+    ? `<img src="${p.image}" alt="${esc(p.name)}的产品图片" />`
+    : `<div class="no-img">无图</div>`;
+  const tags = [];
+  if (p.category) tags.push(`<span class="tag cat">${esc(p.category)}</span>`);
+  if (p.model) tags.push(`<span class="tag">型号 ${esc(p.model)}</span>`);
+  if (p.material) tags.push(`<span class="tag">材质 ${esc(p.material)}</span>`);
+  if (p.ageRange) tags.push(`<span class="tag">${esc(p.ageRange)}</span>`);
+  const tagHtml = tags.length ? `<div class="prod-tags">${tags.join("")}</div>` : "";
+  const barcodeHtml = p.barcode ? `<div class="prod-barcode">${renderBarcode(p.barcode)}</div>` : "";
+  const alerts = productAlerts(p);
+  const alertHtml = alerts.length ? `<div class="prod-alerts">${alerts.map(t => `<span class="alert-tag ${t.cls}">${t.text}</span>`).join("")}</div>` : "";
+  return `
+  <div class="product" data-id="${p.id}">
+    <div class="prod-img">${img}</div>
+    <div class="prod-info">
+      <div class="prod-name">${esc(p.name)}</div>
+      ${tagHtml}
+      <div class="prod-nums">进货 ${money(p.purchasePrice)} · 零售 ${money(p.retailPrice)} · 数量 ${q}</div>
+      <div class="prod-cost">单件成本(含运费) <b>${money(cost)}</b></div>
+      <div class="prod-profit ${profit >= 0 ? "up" : "down"}">单件毛利 ${money(profit)} · 毛利率 ${pct(margin)}</div>
+      ${q > 1 ? `<div class="prod-sub">小计零售 ${money(rp * q)} · 小计毛利 ${money(profit * q)}</div>` : ""}
+      ${barcodeHtml}
+      ${alertHtml}
+    </div>
+    <div class="row-actions">
+      <button class="btn" data-action="edit-product" data-id="${p.id}">编辑</button>
+      <button class="btn danger" data-action="del-product" data-id="${p.id}">删除</button>
+    </div>
+  </div>`;
+}
+
+function renderAll() { renderSummary(); renderAlerts(); renderStores(); }
+
+/* ---------- 扫码入库 (包裹级) ---------- */
+function scanPanelHtml(pid) {
+  return `<section class="scan-in" data-pkg="${pid}" aria-label="本包裹扫码入库">
+    <div class="scan-in-row">
+      <span class="scan-in-label">扫码入库</span>
+      <input type="text" id="scanInput-${pid}" class="scan-in-input" placeholder="聚焦后用扫码枪扫入条码，或手动输入后回车" autocomplete="off" />
+      <button class="btn cam-btn" data-action="scan-camera" data-pkg="${pid}" title="相机扫码" aria-label="相机扫码"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>相机</button>
+      <button class="btn" data-action="scan-clear" data-pkg="${pid}">清空</button>
+    </div>
+    <div class="scan-result" id="scanResult-${pid}"></div>
+  </section>`;
+}
+function findProductByBarcode(code) {
+  const c = String(code || "").trim();
+  return state.products.find(p => p.barcode && p.barcode.trim() === c);
+}
+function renderScanResult(code, pid) {
+  const box = document.getElementById("scanResult-" + pid);
+  if (!box) return;
+  const c = String(code || "").trim();
+  const matches = state.products.filter(p => p.barcode && p.barcode.trim() === c);
+  if (matches.length > 0) {
+    const cards = matches.map(prod => {
+      const pkg = state.packages.find(x => x.id === prod.packageId);
+      const store = pkg ? state.stores.find(s => s.id === pkg.storeId) : null;
+      const q = Number(prod.quantity) || 0;
+      return `
+      <div class="scan-card">
+        <div>
+          <div class="sc-name">${esc(prod.name)}</div>
+          <div class="sc-meta">${store ? esc(store.name) + " / " : ""}${pkg ? esc(pkg.name || "未命名包裹") : ""} · 批发 ${money(prod.purchasePrice)} · 零售 ${money(prod.retailPrice)} · 库存 ${q} 件</div>
+        </div>
+        <div class="scan-stepper">
+          <input type="number" id="scanQty-${pid}-${prod.id}" min="1" step="1" value="1" />
+          <button class="btn primary" data-action="scan-stock-add" data-id="${prod.id}" data-pkg="${pid}">入库 +</button>
+        </div>
+      </div>`;
+    }).join("");
+    const hint = matches.length > 1
+      ? `<div class="rp-note" style="margin-bottom:6px">该条码对应 <b>${matches.length}</b> 个产品（不同供应商 / 包裹，批发价不同），请选择要入库的那一家。</div>`
+      : `<div class="rp-note" style="margin-bottom:6px">请确认下方供应商 / 包裹与批发价正确后再入库。</div>`;
+    box.innerHTML = hint + cards;
+  } else if (pid === "__global__") {
+    box.innerHTML = `
+      <div class="scan-card">
+        <div class="scan-empty">未找到条码为 <b>${esc(code)}</b> 的产品。请先在对应包裹的扫码框「新建产品」录入一次，之后就能全局扫码入库。</div>
+      </div>`;
+  } else {
+    box.innerHTML = `
+      <div class="scan-card">
+        <div class="scan-empty">未找到条码为 <b>${esc(code)}</b> 的产品。
+          <button class="btn primary" data-action="scan-create" data-code="${esc(code)}" data-pkg="${pid}">在本包裹新建产品带入条码</button>
+        </div>
+      </div>`;
+  }
+}
+function doScan(code, pid) {
+  const c = String(code || "").trim();
+  if (!c) return;
+  renderScanResult(c, pid);
+  const inp = document.getElementById("scanInput-" + pid);
+  if (inp) inp.focus();
+}
+function scanAddStock(id, qty, pid) {
+  const p = state.products.find(x => x.id === id);
+  if (!p) return;
+  const add = Math.max(1, Math.floor(Number(qty)) || 1);
+  p.quantity = (Number(p.quantity) || 0) + add;
+  if (!Array.isArray(p.stockLog)) p.stockLog = [];
+  p.stockLog.push({ at: Date.now(), qty: add, init: false });
+  saveData().then(() => {
+    renderAll();
+    toast("已入库，库存 " + p.quantity + " 件");
+    const inp = document.getElementById("scanInput-" + pid);
+    if (inp) { inp.value = ""; inp.focus(); }
+  });
+}
+function scanCreateProduct(code, pid) {
+  if (!pid) { toast("请先建立一个包裹再来入库"); return; }
+  openProductForm(pid, null);
+  const bi = document.getElementById("f-barcode");
+  if (bi) { bi.value = code; }
+  const pv = document.getElementById("barcodePreview");
+  if (pv) pv.innerHTML = renderBarcode(code);
+  checkBarcodeDup(code);
+  prefillFromBarcode();
+}
+function checkBarcodeDup(code) {
+  const c = String(code || "").trim();
+  const warn = document.getElementById("barcodeDup");
+  if (!warn) return;
+  if (!c) { warn.style.display = "none"; return; }
+  const dup = state.products.find(p => p.barcode && p.barcode.trim() === c && p.id !== (curEdit.id || ""));
+  warn.style.display = dup ? "block" : "none";
+}
+/* 取该码最近创建的产品，用于「新建产品」自动带入默认值 */
+function lastProductByBarcode(code) {
+  const c = String(code || "").trim();
+  if (!c) return null;
+  let best = null, bestT = -1;
+  state.products.forEach(p => {
+    if (p.barcode && p.barcode.trim() === c && (Number(p.createdAt) || 0) >= bestT) {
+      best = p; bestT = Number(p.createdAt) || 0;
+    }
+  });
+  return best;
+}
+/* 新建产品时按同码最近产品预填：只填空字段，不覆盖已输入内容；图片在无图时带入 */
+function prefillFromBarcode() {
+  const bi = document.getElementById("f-barcode");
+  if (!bi) return;
+  const src = lastProductByBarcode(bi.value);
+  if (!src) return;
+  const set = (id, val) => { const el = document.getElementById(id); if (el && el.value === "") el.value = val == null ? "" : val; };
+  set("f-name", src.name || "");
+  set("f-buy", src.purchasePrice == null ? "" : src.purchasePrice);
+  set("f-sell", src.retailPrice == null ? "" : src.retailPrice);
+  set("f-cat", src.category || "");
+  set("f-material", src.material || "");
+  set("f-age", src.ageRange || "");
+  set("f-model", src.model || "");
+  set("f-expiry", src.expiry || "");
+  if (src.image && !curEdit.image) {
+    curEdit.image = src.image;
+    curEdit.imageName = src.imageName || "";
+    const pv = document.getElementById("imgPreview");
+    if (pv) pv.innerHTML = `<img src="${src.image}" alt="预览" />`;
+  }
+}
+function fillBarcodeFromScan(val) {
+  const code = String(val || "").trim(); if (!code) return;
+  const bi = document.getElementById("f-barcode");
+  if (bi) { bi.value = code; }
+  const pv = document.getElementById("barcodePreview");
+  if (pv) pv.innerHTML = renderBarcode(code);
+  checkBarcodeDup(code);
+}
+
+/* ---------- 模态表单 ---------- */
+const modal = document.getElementById("modal");
+const modalTitle = document.getElementById("modalTitle");
+const modalBody = document.getElementById("modalBody");
+let curEdit = null; // {type, id, image, imageName}
+
+function openModal(title) { modalTitle.textContent = title; modal.classList.add("open"); document.body.style.overflow = "hidden"; }
+function closeModal() { modal.classList.remove("open"); modalBody.innerHTML = ""; curEdit = null; document.body.style.overflow = ""; }
+
+function field(label, hint, inputHtml, inputId) {
+  return `<div class="field"><label for="${inputId || ""}">${label}${hint ? ` <span class="hint">${hint}</span>` : ""}</label>${inputHtml}</div>`;
+}
+
+function openStoreForm(id) {
+  const s = id ? state.stores.find(x => x.id === id) : null;
+  curEdit = { type: "store", id: id || null };
+  openModal(id ? "编辑供应商" : "新增供应商");
+  modalBody.innerHTML = field("供应商名称", "必填", `<input type="text" id="f-name" value="${esc(s ? s.name : "")}" placeholder="如：天猫旗舰店" />`, "f-name");
+  document.getElementById("f-name").focus();
+}
+
+function openPackageForm(storeId, id) {
+  const pkg = id ? state.packages.find(x => x.id === id) : null;
+  curEdit = { type: "package", id: id || null, storeId };
+  openModal(id ? "编辑包裹" : "新增包裹");
+  modalBody.innerHTML =
+    field("包裹编号 / 备注", "如：SF123456 或 批次A", `<input type="text" id="f-name" value="${esc(pkg ? pkg.name : "")}" placeholder="选填，便于区分" />`, "f-name")
+    + field("物流费用", "本包裹的总运费，将按件平摊", `<input type="number" id="f-fee" min="0" step="0.01" inputmode="decimal" value="${pkg ? pkg.logisticsFee : ""}" placeholder="0.00" />`, "f-fee");
+  document.getElementById("f-name").focus();
+}
+
+function openProductForm(packageId, id) {
+  const p = id ? state.products.find(x => x.id === id) : null;
+  curEdit = { type: "product", id: id || null, packageId, image: p ? p.image : "", imageName: p ? p.imageName : "" };
+  openModal(id ? "编辑产品" : "新增产品");
+  const preview = curEdit.image
+    ? `<img src="${curEdit.image}" alt="预览" />`
+    : `<div class="ph">无图片</div>`;
+  modalBody.innerHTML =
+    field("产品名称", "必填", `<input type="text" id="f-name" value="${esc(p ? p.name : "")}" placeholder="如：纯棉T恤" />`, "f-name")
+    + field("产品型号", "选填", `<input type="text" id="f-model" value="${esc(p ? p.model : "")}" placeholder="如：TS-2024" />`, "f-model")
+    + field("类别", "选填", `<select id="f-cat">${catOptions(p ? p.category : "")}</select>`, "f-cat")
+    + field("材质", "选填", `<input type="text" id="f-material" value="${esc(p ? p.material : "")}" placeholder="如：纯棉 / ABS" />`, "f-material")
+    + field("适用年龄", "选填", `<input type="text" id="f-age" value="${esc(p ? p.ageRange : "")}" placeholder="如：3+ / 6-12岁" />`, "f-age")
+    + field("到期日", "选填，用于临期提醒（食品等易过期品类建议填）", `<input type="date" id="f-expiry" value="${esc(p && p.expiry ? p.expiry : "")}" />`, "f-expiry")
+    + field("一维码", "选填，商品条码", `<input type="text" id="f-barcode" value="${esc(p ? p.barcode : "")}" placeholder="如：6901234567890" />`, "f-barcode")
+    + field("扫码枪填码", "聚焦后扫一下自动填入上方一维码", `<input type="text" id="f-scan" placeholder="扫一下" autocomplete="off" inputmode="numeric" />`, "f-scan")
+    + `<div class="field"><label>条码预览</label><div class="barcode-preview" id="barcodePreview">${renderBarcode(p ? p.barcode : "")}</div></div>`
+    + `<div class="scan-dup" id="barcodeDup">⚠ 该条码已被其他产品使用，避免重复</div>`
+    + `<div class="field"><label for="f-image">产品图片 <span class="hint">选填</span></label>
+        <div class="img-pick">
+          <div class="img-preview" id="imgPreview">${preview}</div>
+          <input type="file" id="f-image" accept="image/*" />
+        </div></div>`
+    + field("进货单价", "单件进货价", `<input type="number" id="f-buy" min="0" step="0.01" inputmode="decimal" value="${p ? p.purchasePrice : ""}" placeholder="0.00" />`, "f-buy")
+    + field("零售价", "单件零售价", `<input type="number" id="f-sell" min="0" step="0.01" inputmode="decimal" value="${p ? p.retailPrice : ""}" placeholder="0.00" />`, "f-sell")
+    + field("数量", "该包裹内此产品的件数", `<input type="number" id="f-qty" min="1" step="1" inputmode="numeric" value="${p ? p.quantity : 1}" placeholder="1" />`, "f-qty");
+  document.getElementById("f-name").focus();
+
+  const barcodeInput = document.getElementById("f-barcode");
+  const barcodePreview = document.getElementById("barcodePreview");
+  barcodeInput.addEventListener("input", () => {
+    barcodePreview.innerHTML = renderBarcode(barcodeInput.value.trim());
+    checkBarcodeDup(barcodeInput.value.trim());
+  });
+  /* 新建产品（非编辑）时，条码失焦后按同码最近产品自动预填默认值 */
+  barcodeInput.addEventListener("change", () => { if (!curEdit.id) prefillFromBarcode(); });
+
+  const scanBox = document.getElementById("f-scan");
+  scanBox.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); fillBarcodeFromScan(scanBox.value); scanBox.value = ""; }
+  });
+  scanBox.addEventListener("blur", () => { if (scanBox.value.trim()) { fillBarcodeFromScan(scanBox.value); scanBox.value = ""; } });
+
+  const fileInput = document.getElementById("f-image");
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    try {
+      const dataUrl = await compressImage(file);
+      curEdit.image = dataUrl;
+      curEdit.imageName = file.name;
+      document.getElementById("imgPreview").innerHTML = `<img src="${dataUrl}" alt="预览" />`;
+      toast("图片已压缩");
+    } catch (e) {
+      console.error(e);
+      const reader = new FileReader();
+      reader.onload = () => {
+        curEdit.image = reader.result;
+        curEdit.imageName = file.name;
+        document.getElementById("imgPreview").innerHTML = `<img src="${reader.result}" alt="预览" />`;
+      };
+      reader.readAsDataURL(file);
+      toast("压缩失败，已用原图");
+    }
+  });
+}
+
+function openAuthForm() {
+  curEdit = { type: "auth" };
+  openModal("登录 / 注册（同步账号）");
+  modalBody.innerHTML =
+    field("邮箱", "用于两端登录同一账号", `<input type="email" id="f-email" value="" placeholder="you@example.com" inputmode="email" />`, "f-email")
+    + field("密码", "至少 6 位", `<input type="password" id="f-pwd" value="" placeholder="••••••" />`, "f-pwd")
+    + field("模式", "", `<select id="f-mode"><option value="login">登录</option><option value="signup">注册新账号</option></select>`, "f-mode")
+    + `<div class="field"><div class="hint">账号仅用于同步你的理货数据，数据存到你自己的 Supabase 项目，安全私密。</div></div>`;
+  document.getElementById("f-email").focus();
+}
+
+function openSbSettings() {
+  curEdit = { type: "sb" };
+  openModal("同步设置（Supabase）");
+  modalBody.innerHTML =
+    field("Supabase 网址", "项目 URL，如 https://xxxx.supabase.co", `<input type="text" id="f-url" value="${esc(sbCfg.url || "")}" placeholder="https://xxxx.supabase.co" />`, "f-url")
+    + field("匿名密钥 anon key", "Project API 里的 anon / public key", `<input type="text" id="f-key" value="${esc(sbCfg.key || "")}" placeholder="eyJ..." />`, "f-key")
+    + `<div class="field"><div class="hint">已内置默认 Supabase 配置，通常无需修改，直接点「登录同步」登录即可。若需更换同步项目，可在此修改后保存。</div></div>`;
+  document.getElementById("f-url").focus();
+}
+
+async function saveForm() {
+  if (!curEdit) return;
+  if (curEdit.type === "auth") {
+    const email = document.getElementById("f-email").value.trim();
+    const pwd = document.getElementById("f-pwd").value;
+    const mode = document.getElementById("f-mode").value;
+    if (!email || !pwd) { toast("请填写邮箱和密码"); return; }
+    if (!sbClient) { toast("请先在「同步设置」填写 Supabase 地址和密钥"); return; }
+    let res;
+    if (mode === "signup") res = await sbClient.auth.signUp({ email, password: pwd });
+    else res = await sbClient.auth.signInWithPassword({ email, password: pwd });
+    if (res.error) { toast("失败：" + res.error.message); return; }
+    if (mode === "signup" && res.data.session === null) { closeModal(); updateSyncUI(); toast("注册成功，请先到邮箱点击确认链接，再登录"); return; }
+    const remote = await loadRemote();
+    if (remote && remote.data && Array.isArray(remote.data.products)) { state = remote.data; await saveLocal(); }
+    renderAll(); closeModal(); updateSyncUI();
+    toast(mode === "signup" ? "注册并登录成功" : "登录成功");
+    return;
+  }
+  if (curEdit.type === "sb") {
+    sbCfg = { url: document.getElementById("f-url").value.trim(), key: document.getElementById("f-key").value.trim() };
+    localStorage.setItem(LS_SB, JSON.stringify(sbCfg));
+    initSb();
+    closeModal(); updateSyncUI();
+    toast(sbClient ? "已连接，请点「登录同步」" : "配置无效，请检查网址和密钥");
+    return;
+  }
+  if (curEdit.type === "store") {
+    const name = document.getElementById("f-name").value.trim();
+    if (!name) { toast("请填写供应商名称"); return; }
+    if (curEdit.id) { const s = state.stores.find(x => x.id === curEdit.id); s.name = name; }
+    else state.stores.push({ id: uid(), name, createdAt: Date.now() });
+  } else if (curEdit.type === "package") {
+    const name = document.getElementById("f-name").value.trim();
+    const fee = Math.max(0, num(document.getElementById("f-fee").value));
+    if (curEdit.id) { const p = state.packages.find(x => x.id === curEdit.id); p.name = name; p.logisticsFee = fee; }
+    else state.packages.push({ id: uid(), storeId: curEdit.storeId, name, logisticsFee: fee, createdAt: Date.now() });
+  } else if (curEdit.type === "product") {
+    const name = document.getElementById("f-name").value.trim();
+    if (!name) { toast("请填写产品名称"); return; }
+    const buy = Math.max(0, num(document.getElementById("f-buy").value));
+    const sell = Math.max(0, num(document.getElementById("f-sell").value));
+    const qty = Math.max(1, Math.floor(num(document.getElementById("f-qty").value)) || 1);
+    const model = document.getElementById("f-model").value.trim();
+    const category = document.getElementById("f-cat").value;
+    const material = document.getElementById("f-material").value.trim();
+    const ageRange = document.getElementById("f-age").value.trim();
+    const barcode = document.getElementById("f-barcode").value.trim();
+    const expiry = document.getElementById("f-expiry").value.trim();
+    /* 同一条码共用同一张图片：已有同码产品带图则复用，避免重复 base64 占用存储 */
+    const shared = state.products.find(o => o.id !== (curEdit.id || "") && o.barcode && o.barcode.trim() === barcode && o.image);
+    const image = shared ? shared.image : curEdit.image;
+    const imageName = shared ? shared.imageName : curEdit.imageName;
+    if (curEdit.id) {
+      const p = state.products.find(x => x.id === curEdit.id);
+      Object.assign(p, { name, purchasePrice: buy, retailPrice: sell, quantity: qty, model, category, material, ageRange, barcode, expiry, image, imageName });
+    } else {
+      const now = Date.now();
+      state.products.push({ id: uid(), packageId: curEdit.packageId, name, purchasePrice: buy, retailPrice: sell, quantity: qty, model, category, material, ageRange, barcode, expiry, image, imageName, createdAt: now, stockLog: [{ at: now, qty: qty, init: true }] });
+    }
+    if (curEdit.type === "alert") {
+      const low = Math.max(0, Math.floor(num(document.getElementById("f-low").value)) || 0);
+      const near = Math.max(0, Math.floor(num(document.getElementById("f-near").value)) || 0);
+      const discount = Math.min(1, Math.max(0.05, num(document.getElementById("f-discount").value) || 0.7));
+      const multi = Math.min(20, Math.max(0.5, num(document.getElementById("f-multi").value) || 2));
+      alertCfg = { lowStock: low, nearExpiryDays: near, clearanceDiscount: discount, procureMultiplier: multi };
+      localStorage.setItem(LS_ALERT, JSON.stringify(alertCfg));
+      closeModal(); renderAll(); toast("预警设置已保存"); return;
+    }
+  }
+  saveData().then(() => { renderAll(); closeModal(); toast("已保存"); });
+}
+
+/* ---------- 删除（上限：单个包裹；供应商整体删除已移除，防止误删级联） ---------- */
+async function delPackage(id) {
+  const ok = await openConfirm({ title: "删除包裹", message: "删除该包裹将同时删除其下所有产品，确定？", danger: true });
+  if (!ok) return;
+  state.products = state.products.filter(p => p.packageId !== id);
+  state.packages = state.packages.filter(p => p.id !== id);
+  saveData().then(renderAll);
+}
+async function delProduct(id) {
+  const ok = await openConfirm({ title: "删除产品", message: "确定删除该产品？", danger: true });
+  if (!ok) return;
+  state.products = state.products.filter(p => p.id !== id);
+  saveData().then(renderAll);
+}
+
+/* ---------- 导出 / 导入 ---------- */
+function dateStr() { return new Date().toISOString().slice(0, 10); }
+
+const EXPORT_COLS = ["供应商", "包裹编号", "物流费用", "产品名称", "产品型号", "类别", "材质", "适用年龄", "一维码", "数量", "进货单价", "零售价", "单件运费", "单件成本含运费", "单件毛利", "毛利率", "小计零售", "小计毛利", "图片", "到期日"];
+
+function buildRows() {
+  const rows = [];
+  state.stores.forEach(store => {
+    const pkgs = state.packages.filter(p => p.storeId === store.id);
+    pkgs.forEach(pkg => {
+      const items = pkgItems(pkg.id);
+      if (items.length === 0) {
+        rows.push({ 供应商: store.name, 包裹编号: pkg.name || "", 物流费用: pkg.logisticsFee, 产品名称: "", 产品型号: "", 类别: "", 材质: "", 适用年龄: "", 一维码: "", 数量: "", 进货单价: "", 零售价: "", 单件运费: perItemFee(pkg).toFixed(2), 单件成本含运费: "", 单件毛利: "", 毛利率: "", 小计零售: "", 小计毛利: "", 图片: "", id_store: store.id, id_pkg: pkg.id, id_prod: "" });
+      }
+      items.forEach(p => {
+        const q = Number(p.quantity) || 0, rp = Number(p.retailPrice) || 0, profit = productProfit(p);
+        rows.push({
+          供应商: store.name, 包裹编号: pkg.name || "", 物流费用: pkg.logisticsFee,
+          产品名称: p.name, 产品型号: p.model || "", 类别: p.category || "", 材质: p.material || "", 适用年龄: p.ageRange || "", 一维码: p.barcode || "",
+          数量: q, 进货单价: p.purchasePrice, 零售价: p.retailPrice,
+          单件运费: perItemFee(pkg).toFixed(2), 单件成本含运费: productCost(p).toFixed(2),
+          单件毛利: profit.toFixed(2), 毛利率: pct(productMargin(p)),
+          小计零售: (rp * q).toFixed(2), 小计毛利: (profit * q).toFixed(2),
+          图片: p.image || "", 到期日: p.expiry || "", id_store: store.id, id_pkg: pkg.id, id_prod: p.id
+        });
+      });
+    });
+  });
+  return rows;
+}
+
+function exportXlsx() {
+  if (typeof XLSX === "undefined") { toast("表格库未加载，改用 CSV 导出"); return exportCsv(); }
+  const rows = buildRows();
+  const s = computeSummary();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const ws2 = XLSX.utils.json_to_sheet([
+    { 指标: "总进货成本", 数值: s.cost },
+    { 指标: "总物流费用", 数值: s.fee },
+    { 指标: "预计零售总额", 数值: s.retail },
+    { 指标: "总毛利", 数值: s.profit },
+    { 指标: "整体毛利率", 数值: pct(s.margin) },
+    { 指标: "供应商数", 数值: s.storeCount },
+    { 指标: "包裹数", 数值: s.pkgCount },
+    { 指标: "产品种类数", 数值: s.productCount },
+    { 指标: "总件数", 数值: s.qty }
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "理货明细");
+  XLSX.utils.book_append_sheet(wb, ws2, "汇总");
+  XLSX.writeFile(wb, `理货数据_${dateStr()}.xlsx`);
+  toast("已导出 Excel");
+}
+
+function exportCsv() {
+  const rows = buildRows();
+  const lines = [EXPORT_COLS.join(",")];
+  rows.forEach(r => {
+    const cells = EXPORT_COLS.map(k => {
+      let v = r[k];
+      if (v === "" || v == null) v = "";
+      v = String(v).replace(/"/g, '""');
+      return /[",\n]/.test(v) ? `"${v}"` : v;
+    });
+    lines.push(cells.join(","));
+  });
+  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  downloadBlob(blob, `理货数据_${dateStr()}.csv`);
+  toast("已导出 CSV");
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+/* 导出 JSON 备份：完整无损，结构与 IndexedDB 存储一致，导入可 100% 还原 */
+function exportJson() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  downloadBlob(blob, `理货管家备份_${dateStr()}.json`);
+  toast("已导出 JSON 备份（完整无损）");
+}
+
+/* 从 JSON 备份完整恢复（覆盖当前全部数据） */
+async function importJson(file) {
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if (!data || !Array.isArray(data.products) || !Array.isArray(data.packages) || !Array.isArray(data.stores)) {
+      toast("备份文件格式不正确，未导入"); return;
+    }
+    const ok = await openConfirm({ title: "导入 JSON 备份", message: "导入会用备份文件完整替换当前全部数据（供应商 / 包裹 / 产品），且无法撤销。建议先点「导出备份」留一份当前数据。确定覆盖导入？", okText: "覆盖导入", danger: true });
+    if (!ok) return;
+    state = { stores: data.stores || [], packages: data.packages || [], products: data.products || [] };
+    migrateState();
+    dedupImages();
+    await saveData();
+    collapsed.clear();
+    renderAll();
+    closeReport();
+    toast("已从备份恢复全部数据");
+  } catch (e) {
+    console.error(e);
+    toast("导入失败，请检查文件是否为有效的备份");
+  }
+}
+
+async function importFile(file) {
+  const fname = (file.name || "").toLowerCase();
+  if (fname.endsWith(".json")) { await importJson(file); return; }
+  if (typeof XLSX === "undefined") { toast("需要联网加载表格库才能导入"); return; }
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets["理货明细"] || wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws);
+    rows.forEach(r => {
+      const storeName = (r["供应商"] || r["店铺"] || "").toString().trim();
+      if (!storeName) return;
+      let store = r["id_store"] ? state.stores.find(s => s.id === r["id_store"]) : state.stores.find(s => s.name === storeName);
+      if (!store) { store = { id: r["id_store"] || uid(), name: storeName, createdAt: Date.now() }; state.stores.push(store); }
+      const pkgName = (r["包裹编号"] || "").toString();
+      let pkg = r["id_pkg"] ? state.packages.find(p => p.id === r["id_pkg"]) : state.packages.find(p => p.storeId === store.id && (p.name || "") === pkgName);
+      if (!pkg) { pkg = { id: r["id_pkg"] || uid(), storeId: store.id, name: pkgName, logisticsFee: num(r["物流费用"]), createdAt: Date.now() }; state.packages.push(pkg); }
+      const prodName = (r["产品名称"] || "").toString().trim();
+      if (!prodName) return;
+      let prod = r["id_prod"] ? state.products.find(p => p.id === r["id_prod"]) : null;
+      const data = {
+        name: prodName, purchasePrice: num(r["进货单价"]), retailPrice: num(r["零售价"]),
+        quantity: Math.max(1, Math.floor(num(r["数量"])) || 1), image: r["图片"] || "", imageName: "",
+        model: (r["产品型号"] || "").toString().trim(), category: (r["类别"] || "").toString().trim(),
+        material: (r["材质"] || "").toString().trim(), ageRange: (r["适用年龄"] || "").toString().trim(),
+        barcode: (r["一维码"] || "").toString().trim(), expiry: (r["到期日"] || "").toString().trim()
+      };
+      if (prod) Object.assign(prod, data);
+      else state.products.push(Object.assign({ id: r["id_prod"] || uid(), packageId: pkg.id }, data));
+    });
+    await saveData();
+    renderAll();
+    toast("导入完成");
+  } catch (e) {
+    console.error(e);
+    toast("导入失败，请检查文件格式");
+  }
+}
+
+/* ---------- Toast ---------- */
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+/* ---------- 应用内确认弹窗（替代原生 confirm） ---------- */
+const confirmModal = document.getElementById("confirmModal");
+const confirmTitle = document.getElementById("confirmTitle");
+const confirmMsg = document.getElementById("confirmMsg");
+const confirmOk = document.getElementById("confirmOk");
+const confirmCancel = document.getElementById("confirmCancel");
+let confirmResolver = null;
+function openConfirm(opts) {
+  const o = opts || {};
+  confirmTitle.textContent = o.title || "确认";
+  confirmMsg.textContent = o.message || "";
+  confirmOk.textContent = o.okText || "确定";
+  confirmCancel.textContent = o.cancelText || "取消";
+  confirmOk.className = o.danger ? "btn danger" : "btn primary";
+  confirmModal.classList.add("open");
+  document.body.style.overflow = "hidden";
+  confirmOk.focus();
+  return new Promise((resolve) => {
+    confirmResolver = (val) => {
+      confirmModal.classList.remove("open");
+      document.body.style.overflow = "";
+      confirmResolver = null;
+      resolve(val);
+    };
+  });
+}
+function confirmYes() { if (confirmResolver) confirmResolver(true); }
+function confirmNo() { if (confirmResolver) confirmResolver(false); }
+confirmOk.addEventListener("click", confirmYes);
+confirmCancel.addEventListener("click", confirmNo);
+confirmModal.addEventListener("click", (e) => { if (e.target === confirmModal) confirmNo(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && confirmModal.classList.contains("open")) confirmNo();
+});
+
+/* ---------- 事件委托 ---------- */
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action, id = btn.dataset.id;
+  if (action !== "nav-more") closeMorePanel();
+  switch (action) {
+    case "nav-home": closeReport(); closeClearance(); closeProcure(); setNavActive("home"); break;
+    case "nav-more": toggleMorePanel(); break;
+    case "add-store": openStoreForm(null); break;
+    case "edit-store": openStoreForm(id); break;
+    case "add-package": openPackageForm(id, null); break;
+    case "edit-package": openPackageForm(null, id); break;
+    case "del-package": delPackage(id); break;
+    case "add-product": openProductForm(id, null); break;
+    case "edit-product": openProductForm(null, id); break;
+    case "del-product": delProduct(id); break;
+    case "toggle-store":
+    case "toggle-package":
+      if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+      renderStores();
+      break;
+    case "export-xlsx": exportXlsx(); break;
+    case "export-csv": exportCsv(); break;
+    case "import-file": document.getElementById("importInput").click(); break;
+    case "export-json": exportJson(); break;
+    case "report": openReport(); break;
+    case "report-back": closeReport(); break;
+    case "report-img": exportImage(document.getElementById("reportView"), `半月报_${reportMonthValue()}`); break;
+    case "report-pdf": exportPdf(document.getElementById("reportView"), `半月报_${reportMonthValue()}`); break;
+    case "report-xlsx": reportExportXlsx(); break;
+    case "clearance": openClearance(); break;
+    case "clearance-back": closeClearance(); break;
+    case "clearance-copy": clearanceCopy(); break;
+    case "clearance-img": exportImage(document.getElementById("clearanceView"), `清仓清单_${dateStr()}`); break;
+    case "clearance-pdf": exportPdf(document.getElementById("clearanceView"), `清仓清单_${dateStr()}`); break;
+    case "procure": openProcure(); break;
+    case "procure-back": closeProcure(); break;
+    case "procure-copy": procCopy(); break;
+    case "procure-xlsx": procExportXlsx(); break;
+    case "quarter": openQuarter(); break;
+    case "quarter-back": closeQuarter(); break;
+    case "quarter-img": exportImage(document.getElementById("quarterView"), `季度复盘_${quarterCurrent()}`); break;
+    case "quarter-pdf": exportPdf(document.getElementById("quarterView"), `季度复盘_${quarterCurrent()}`); break;
+    case "quarter-xlsx": quarterExportXlsx(); break;
+    case "sb-settings": openSbSettings(); break;
+    case "alert-settings": openAlertSettings(); break;
+    case "auth":
+      (async () => {
+        if (!sbClient) { openAuthForm(); return; }
+        const s = await sbSession();
+        if (s) { await sbClient.auth.signOut(); toast("已退出登录"); updateSyncUI(); }
+        else openAuthForm();
+      })();
+      break;
+    case "sync-now":
+      (async () => {
+        if (!sbClient) { toast("请先在「同步设置」填写并登录"); return; }
+        const s = await sbSession(); if (!s) { toast("请先登录同步账号"); return; }
+        const remote = await loadRemote();
+        if (remote && remote.data && Array.isArray(remote.data.products)) { state = remote.data; await saveLocal(); renderAll(); }
+        const ok = await saveRemote();
+        updateSyncUI(ok);
+        toast(ok ? "同步完成" : "同步失败，检查网络");
+      })();
+      break;
+    case "scan-clear": {
+      const pid = btn.dataset.pkg;
+      const box = document.getElementById("scanResult-" + pid);
+      if (box) box.innerHTML = "";
+      const inp = document.getElementById("scanInput-" + pid);
+      if (inp) { inp.value = ""; inp.focus(); }
+      break;
+    }
+    case "scan-camera": openCameraScan(btn.dataset.pkg); break;
+    case "scan-stock-add": {
+      const qtyEl = document.getElementById("scanQty-" + pid + "-" + id);
+      scanAddStock(id, qtyEl ? qtyEl.value : 1, btn.dataset.pkg);
+      break;
+    }
+    case "scan-create": scanCreateProduct(btn.dataset.code, btn.dataset.pkg); break;
+  }
+});
+
+document.getElementById("modalClose").addEventListener("click", closeModal);
+document.getElementById("modalCancel").addEventListener("click", closeModal);
+document.getElementById("modalSave").addEventListener("click", saveForm);
+modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+modal.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const f = modal.querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])');
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && modal.classList.contains("open")) closeModal(); });
+
+document.getElementById("importInput").addEventListener("change", (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) importFile(f);
+  e.target.value = "";
+});
+
+document.getElementById("storeList").addEventListener("keydown", (e) => {
+  const inp = e.target;
+  if (!inp || !inp.classList || !inp.classList.contains("scan-in-input")) return;
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const pid = inp.id.replace("scanInput-", "");
+    doScan(inp.value, pid);
+  }
+});
+
+document.getElementById("globalScanInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); doScan(e.target.value, "__global__"); }
+});
+
+document.getElementById("reportView").addEventListener("change", (e) => {
+  if (e.target && e.target.id === "reportMonth") renderReport(e.target.value);
+});
+
+/* ---------- 半月报分析 ---------- */
+const TRENDY_CATS = ["盲抽盲盒", "潮流"];
+const PRICE_ORDER = ["未定价", "≤10元", "10-30元", "30-80元", ">80元"];
+const sum = (arr, f) => arr.reduce((s, x) => s + (f(x) || 0), 0);
+function groupBy(rows, keyFn, aggFn) {
+  const m = new Map();
+  rows.forEach(r => { const k = keyFn(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+  const out = [];
+  m.forEach((g, k) => out.push(Object.assign({ key: k }, aggFn(g))));
+  return out;
+}
+const restockAgg = (g) => ({ products: g.length, p1: sum(g, r => r.p1c), p2: sum(g, r => r.p2c), q: sum(g, r => r.tq), rested: g.filter(r => r.tc > 0).length });
+const restockLog = (p) => (p.stockLog || []).filter(e => e && !e.init);
+const ymOf = (ts) => { const d = new Date(ts); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); };
+const dayOf = (ts) => new Date(ts).getDate();
+const prevMonth = (ym) => { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m - 2, 1); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); };
+const productCat = (p) => p.category || "未分类";
+const priceTier = (rp) => {
+  if (!rp || rp <= 0) return "未定价";
+  if (rp <= 10) return "≤10元";
+  if (rp <= 30) return "10-30元";
+  if (rp <= 80) return "30-80元";
+  return ">80元";
+};
+function analyzeMonth(ym) {
+  return state.products.map(p => {
+    const logs = restockLog(p).filter(e => ymOf(e.at) === ym);
+    let p1c = 0, p1q = 0, p2c = 0, p2q = 0;
+    logs.forEach(e => { const d = dayOf(e.at); if (d <= 15) { p1c++; p1q += Number(e.qty) || 0; } else { p2c++; p2q += Number(e.qty) || 0; } });
+    return { p, p1c, p1q, p2c, p2q, tc: p1c + p2c, tq: p1q + p2q, everRestock: restockLog(p).length > 0 };
+  });
+}
+function reportShell(ym, body) {
+  return `<div class="rp-head">
+      <div><h2>📊 半月报分析</h2><p class="rp-sub">按「补货（扫码入库）」记录统计 · 数据来自本机 IndexedDB · 仅统计非初始的补货次数</p></div>
+      <div class="rp-controls">
+        <label class="rp-month">月份 <input type="month" id="reportMonth" value="${ym}" /></label>
+        <button class="btn" data-action="report-xlsx">导出 Excel</button>
+        <button class="btn" data-action="report-img">导出图片</button>
+        <button class="btn" data-action="report-pdf">导出 PDF</button>
+        <button class="btn" data-action="report-back">← 返回理货</button>
+      </div>
+    </div>${body}`;
+}
+function rpBar(label, val, max, valText) {
+  const w = max > 0 ? Math.round(val / max * 100) : 0;
+  return `<div class="rp-barrow">
+      <div class="rp-barlabel">${esc(label)}</div>
+      <div class="rp-bartrack"><div class="rp-barfill" style="width:${w}%"></div></div>
+      <div class="rp-barval">${valText}</div>
+    </div>`;
+}
+function rpDelta(cur, prev) {
+  const d = Number(cur) - Number(prev);
+  if (d > 0) return `<span class="rp-up">▲ +${d}</span>`;
+  if (d < 0) return `<span class="rp-down">▼ ${d}</span>`;
+  return `<span class="rp-flat">— 持平</span>`;
+}
+function rpCmpCard(label, cur, prev, prevYm) {
+  return `<div class="rp-card">
+      <div class="rp-num">${cur}</div>
+      <div class="rp-cap">${label}</div>
+      <div class="rp-delta">${rpDelta(cur, prev)} <span class="rp-muted">vs ${prevYm}</span></div>
+    </div>`;
+}
+function renderReport(ym) {
+  const view = document.getElementById("reportView");
+  const rows = analyzeMonth(ym);
+  const total = rows.length;
+  if (total === 0) {
+    view.innerHTML = reportShell(ym, `<div class="rp-empty">还没有任何产品数据。先在「理货管家」里录入或扫码入库产品，半月报才会出数。</div>`);
+    return;
+  }
+  const p1Total = sum(rows, r => r.p1c), p2Total = sum(rows, r => r.p2c);
+  const restedProducts = rows.filter(r => r.tc > 0).length;
+  const frequent = rows.filter(r => r.tc > 0).sort((a, b) => b.tc - a.tc || b.tq - a.tq);
+  const neverRestock = rows.filter(r => !r.everRestock);
+  const monthIdle = rows.filter(r => r.tc === 0);
+  const maxFreq = frequent.length ? frequent[0].tc : 0;
+
+  const byCat = groupBy(rows, r => productCat(r.p), restockAgg).sort((a, b) => (b.p1 + b.p2) - (a.p1 + a.p2));
+  const byPrice = groupBy(rows, r => priceTier(Number(r.p.retailPrice) || 0), restockAgg).sort((a, b) => PRICE_ORDER.indexOf(a.key) - PRICE_ORDER.indexOf(b.key));
+  const byTrend = groupBy(rows, r => TRENDY_CATS.includes(r.p.category) ? "潮流类" : "常规类", restockAgg);
+  const maxCat = Math.max(1, ...byCat.map(g => g.p1 + g.p2));
+  const maxPrice = Math.max(1, ...byPrice.map(g => g.p1 + g.p2));
+
+  const freqHtml = frequent.length ? frequent.map(r => {
+    const phase = (r.p1c > 0 && r.p2c > 0) ? "两阶段都进" : (r.p1c > 0 ? "主要在 1-15号" : "主要在 16-31号");
+    const w = maxFreq > 0 ? Math.round(r.tc / maxFreq * 100) : 0;
+    return `<div class="rp-freq">
+        <div class="rp-freq-main"><span class="rp-freq-name">${esc(r.p.name || "未命名产品")}</span><span class="rp-tag">${esc(productCat(r.p))}</span></div>
+        <div class="rp-bartrack"><div class="rp-barfill" style="width:${w}%"></div></div>
+        <div class="rp-freq-meta">补货 <b>${r.tc}</b> 次 · ${r.tq} 件 · <span class="rp-phase">${phase}</span> <small>(P1 ${r.p1c} / P2 ${r.p2c})</small></div>
+      </div>`;
+  }).join("") : `<div class="rp-empty">本月暂无补货记录（仅有初始录入，没有扫码补货）。开始用扫码枪入库后，这里会自动统计。</div>`;
+
+  const neverHtml = neverRestock.length ? neverRestock.slice(0, 30).map(r => `<li>${esc(r.p.name || "未命名产品")} <span class="rp-muted">· ${esc(productCat(r.p))}</span></li>`).join("") + (neverRestock.length > 30 ? `<li class="rp-muted">…还有 ${neverRestock.length - 30} 个</li>` : "") : `<div class="rp-empty">没有「建了从不补货」的产品，很好。</div>`;
+
+  const catBars = byCat.map(g => rpBar(`${g.key}（${g.rested}/${g.products} 补货）`, g.p1 + g.p2, maxCat, `P1 ${g.p1} · P2 ${g.p2} · ${g.q}件`)).join("");
+  const priceBars = byPrice.map(g => rpBar(`${g.key}（${g.rested}/${g.products} 补货）`, g.p1 + g.p2, maxPrice, `P1 ${g.p1} · P2 ${g.p2} · ${g.q}件`)).join("");
+  const trendy = byTrend.find(x => x.key === "潮流类"), normal = byTrend.find(x => x.key === "常规类");
+  const trendHtml = `<div class="rp-trend">
+      <div class="rp-trend-col"><b>潮流类</b>（盲抽盲盒/潮流）<br>补货 ${trendy ? trendy.p1 + trendy.p2 : 0} 次 · ${trendy ? trendy.q : 0} 件 · ${trendy ? trendy.rested : 0}/${trendy ? trendy.products : 0} 产品</div>
+      <div class="rp-trend-col"><b>常规类</b>（食品/玩具/文具/文创等）<br>补货 ${normal ? normal.p1 + normal.p2 : 0} 次 · ${normal ? normal.q : 0} 件 · ${normal ? normal.rested : 0}/${normal ? normal.products : 0} 产品</div>
+    </div>`;
+
+  const tips = [];
+  if (trendy && normal) {
+    if (trendy.q > normal.q) tips.push(`潮流类本月补货 <b>${trendy.q}</b> 件，高于常规类 ${normal.q} 件，动销更好，建议保持高频跟进并拓展同类 SKU。`);
+    else if (normal.q > trendy.q) tips.push(`常规类补货 ${normal.q} 件 多于潮流类 ${trendy.q} 件，潮流类可适当加码测试。`);
+  }
+  const topCat = byCat[0];
+  if (topCat && (topCat.p1 + topCat.p2) > 0) tips.push(`「${topCat.key}」是本月补货最活跃的种类（共 ${topCat.p1 + topCat.p2} 次），可作为主力选品方向。`);
+  if (neverRestock.length) tips.push(`有 <b>${neverRestock.length}</b> 个产品建了之后从未补过货（只录入没再进），建议复核是否为滞销/一次性，考虑淘汰或促销清仓。`);
+  if (monthIdle.length) tips.push(`本月（${ym}）有 ${monthIdle.length} 个产品没有任何补货动作，可结合销量判断是否继续备货。`);
+  if (!tips.length) tips.push("本月暂无补货记录，扫码入库后这里会自动统计并给出建议。");
+
+  const prevYm = prevMonth(ym);
+  const prevRows = analyzeMonth(prevYm);
+  const prevById = new Map(prevRows.map(r => [r.p.id, r]));
+  const prevP1 = sum(prevRows, r => r.p1c), prevP2 = sum(prevRows, r => r.p2c);
+  const prevRested = prevRows.filter(r => r.tc > 0).length;
+  const prevQ = sum(prevRows, r => r.tq);
+  const prevTotalRestock = prevP1 + prevP2;
+  const prev2Ym = prevMonth(prevYm);
+  const prev2Rows = analyzeMonth(prev2Ym);
+  const p2P1 = sum(prev2Rows, r => r.p1c), p2P2 = sum(prev2Rows, r => r.p2c);
+  const p2Rested = prev2Rows.filter(r => r.tc > 0).length;
+  const p2Q = sum(prev2Rows, r => r.tq);
+  const curQ = sum(rows, r => r.tq);
+  const trendRows = [
+    ["1-15号 补货次数", p2P1, prevP1, p1Total],
+    ["16-31号 补货次数", p2P2, prevP2, p2Total],
+    ["有补货的产品", p2Rested, prevRested, restedProducts],
+    ["补货总件数", p2Q, prevQ, curQ]
+  ].map(([label, a, b, c]) => `<tr>
+      <td>${label}</td><td>${a}</td><td>${b}</td><td class="rp-cur">${c}</td>
+      <td>${rpDelta(c, b)}</td><td>${rpDelta(c, a)}</td>
+    </tr>`).join("");
+  const newRestock = rows.filter(r => r.tc > 0 && (!prevById.has(r.p.id) || prevById.get(r.p.id).tc === 0));
+  const stopped = rows.filter(r => r.tc === 0 && prevById.has(r.p.id) && prevById.get(r.p.id).tc > 0);
+  const momList = (arr) => arr.length ? arr.slice(0, 30).map(r => `<li>${esc(r.p.name || "未命名产品")} <span class="rp-muted">· ${esc(productCat(r.p))}</span></li>`).join("") + (arr.length > 30 ? `<li class="rp-muted">…还有 ${arr.length - 30} 个</li>` : "") : `<div class="rp-empty">无</div>`;
+  const momNote = (prevTotalRestock === 0)
+    ? `<p class="rp-note">上月（${prevYm}）没有补货记录，因此本月补货均为新增，「本月停补」为空属正常。</p>`
+    : `<p class="rp-note">对比前两个月（${prev2Ym} / ${prevYm}）同口径（仅非初始补货）。比值上涨不代表好坏，需结合销量判断；用于发现进货节奏的变化。</p>`;
+  const momHtml = `
+    <h3>📈 环比前两月（${prev2Ym} / ${prevYm} / ${ym}）</h3>
+    ${momNote}
+    <div class="rp-table-wrap"><table class="rp-table">
+      <tr><th>指标</th><th>上上月</th><th>上月</th><th>本月</th><th>较上月</th><th>较上上月</th></tr>
+      ${trendRows}
+    </table></div>
+    <div class="rp-two">
+      <div><h4>本月新增补货 · ${newRestock.length} 个</h4><ul class="rp-list">${momList(newRestock)}</ul></div>
+      <div><h4>本月停补（上月进过、本月没进）· ${stopped.length} 个</h4><ul class="rp-list">${momList(stopped)}</ul></div>
+    </div>`;
+
+  const body = `
+    <div class="rp-cards">
+      <div class="rp-card"><div class="rp-num">${p1Total}</div><div class="rp-cap">1-15号 补货次数</div></div>
+      <div class="rp-card"><div class="rp-num">${p2Total}</div><div class="rp-cap">16-31号 补货次数</div></div>
+      <div class="rp-card"><div class="rp-num">${restedProducts}<span class="rp-den">/${total}</span></div><div class="rp-cap">本月有补货的产品</div></div>
+      <div class="rp-card"><div class="rp-num">${neverRestock.length}</div><div class="rp-cap">从未补货的产品</div></div>
+    </div>
+
+    ${momHtml}
+    <p class="rp-note">图例：环比 ▲ 红 = 上升 / ▼ 绿 = 下降；毛利「绿 = 盈利 / 红 = 亏损」。</p>
+
+    <h3>🔥 进货频繁 TOP（按本月补货次数排序）</h3>
+    <div class="rp-freq-list">${freqHtml}</div>
+
+    <h3>🛑 一直没有进货</h3>
+    <p class="rp-note">「从未补货」= 建了产品后再也没用扫码枪进过货；「本月无补货」含前者。</p>
+    <div class="rp-two">
+      <div><h4>从未补货（建了就再没进过货）· ${neverRestock.length} 个</h4><ul class="rp-list">${neverHtml}</ul></div>
+      <div><h4>本月无补货 · ${monthIdle.length} 个</h4><p class="rp-muted">含上面「从未补货」的产品，以及本月恰好没补货的。</p></div>
+    </div>
+
+    <h3>🧭 选品角度：种类 / 价格 / 潮流度</h3>
+    <h4>按种类（补货次数，P1=1-15号 / P2=16-31号）</h4>
+    <div class="rp-bars">${catBars}</div>
+    <h4>按价格档（零售价）</h4>
+    <div class="rp-bars">${priceBars}</div>
+    <h4>按潮流度</h4>
+    ${trendHtml}
+
+    <h3>💡 选品建议</h3>
+    <ul class="rp-tips">${tips.map(t => `<li>${t}</li>`).join("")}</ul>
+  `;
+  view.innerHTML = reportShell(ym, body);
+}
+function openReport() {
+  document.getElementById("storeList").hidden = true;
+  const bar = document.getElementById("alertBar");
+  if (bar) bar.hidden = true;
+  const gs = document.getElementById("globalScan");
+  if (gs) gs.hidden = true;
+  const view = document.getElementById("reportView");
+  view.hidden = false;
+  setNavActive("report");
+  const now = new Date();
+  const def = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+  renderReport(def);
+}
+function closeReport() {
+  document.getElementById("reportView").hidden = true;
+  document.getElementById("storeList").hidden = false;
+  const gs = document.getElementById("globalScan");
+  if (gs) gs.hidden = false;
+  renderAlerts();
+}
+
+/* ---------- 临期 / 过期清仓清单 ---------- */
+function clearanceItems() {
+  const near = Number(alertCfg.nearExpiryDays);
+  return state.products.map(p => ({ p, d: daysUntilExpiry(p.expiry) }))
+    .filter(x => x.d !== null && (x.d < 0 || (near >= 0 && x.d <= near)))
+    .sort((a, b) => a.d - b.d);
+}
+function renderClearance() {
+  const view = document.getElementById("clearanceView");
+  const near = Number(alertCfg.nearExpiryDays);
+  const items = clearanceItems();
+  const emptyHtml = `<div class="rp-head"><div><h2>🧹 临期 / 过期清仓清单</h2><p class="rp-sub">基于各产品「到期日」与预警阈值（临期≤${near}天）自动汇总</p></div>
+    <div class="rp-controls"><button class="btn" data-action="clearance-back">← 返回理货</button></div></div>
+    <div class="rp-empty">当前没有临期或已过期的产品。给食品等易过期品类填上「到期日」后，这里会自动汇总。</div>`;
+  if (items.length === 0) { view.innerHTML = emptyHtml; return; }
+  const disc = Number(alertCfg.clearanceDiscount) || 0.7;
+  const rows = items.map(x => {
+    const p = x.p, d = x.d;
+    const cls = d < 0 ? "alert-exp" : "alert-near";
+    const tag = d < 0 ? `已过期 ${Math.abs(d)}天` : `临期 ${d}天`;
+    const rp = Number(p.retailPrice) || 0;
+    const suggest = rp > 0 ? money(rp * disc) : "—";
+    return `<div class="clr-item">
+      <div class="clr-name">${esc(p.name || "未命名产品")}${p.category ? ` <span class="tag cat">${esc(p.category)}</span>` : ""} <span class="alert-tag ${cls}">${tag}</span></div>
+      <div class="clr-meta">数量 ${Number(p.quantity) || 0} 件 · 零售价 ${money(rp)} · <b>建议清仓价 ${suggest}</b>（${foldText(disc)}参考）· 到期日 ${esc(p.expiry || "—")}（剩 ${d}天）</div>
+    </div>`;
+  }).join("");
+  view.innerHTML = `<div class="rp-head"><div><h2>🧹 临期 / 过期清仓清单</h2><p class="rp-sub">共 ${items.length} 个，按紧急度排序 · 建议清仓价 = 零售价 × ${disc}（${foldText(disc)}），可在「预警设置」调整</p></div>
+    <div class="rp-controls">
+      <button class="btn" data-action="clearance-copy">复制清单</button>
+      <button class="btn" data-action="clearance-img">导出图片</button>
+      <button class="btn" data-action="clearance-pdf">导出 PDF</button>
+      <button class="btn" data-action="clearance-back">← 返回理货</button>
+    </div></div>
+    <div class="clr-list">${rows}</div>`;
+}
+function openClearance() {
+  document.getElementById("storeList").hidden = true;
+  const bar = document.getElementById("alertBar");
+  if (bar) bar.hidden = true;
+  const gs = document.getElementById("globalScan");
+  if (gs) gs.hidden = true;
+  document.getElementById("clearanceView").hidden = false;
+  setNavActive("clearance");
+  renderClearance();
+}
+function closeClearance() {
+  document.getElementById("clearanceView").hidden = true;
+  document.getElementById("storeList").hidden = false;
+  const gs = document.getElementById("globalScan");
+  if (gs) gs.hidden = false;
+  renderAlerts();
+}
+async function clearanceCopy() {
+  const items = clearanceItems();
+  if (items.length === 0) { toast("没有临期产品可复制"); return; }
+  const lines = ["临期 / 过期清仓清单（" + new Date().toLocaleDateString() + "）", ""];
+  const disc = Number(alertCfg.clearanceDiscount) || 0.7;
+  items.forEach((x, i) => {
+    const p = x.p, d = x.d;
+    const rp = Number(p.retailPrice) || 0;
+    const suggest = rp > 0 ? (rp * disc).toFixed(2) : "—";
+    lines.push(`${i + 1}. ${p.name || "未命名产品"}${p.category ? "（" + p.category + "）" : ""} 数量${Number(p.quantity) || 0} 零售${rp.toFixed(2)} 建议清仓价${suggest} 到期${p.expiry || "—"}（${d < 0 ? "已过期" + Math.abs(d) + "天" : "剩" + d + "天"}）`);
+  });
+  const text = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("清单已复制到剪贴板");
+  } catch (e) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      toast("清单已复制");
+    } catch (e2) { toast("复制失败，请手动选择复制"); }
+  }
+}
+
+/* ---------- 采购清单（按供应商 / 品类汇总） ---------- */
+function procureTarget() { return Math.round((Number(alertCfg.lowStock) || 0) * (Number(alertCfg.procureMultiplier) || 2)); }
+function procureItems() {
+  const target = procureTarget();
+  return state.products.map(p => {
+    const q = Number(p.quantity) || 0;
+    const suggest = Math.max(0, target - q);
+    const cost = Number(p.purchasePrice) || 0;
+    const pkg = state.packages.find(x => x.id === p.packageId);
+    const store = pkg ? state.stores.find(s => s.id === pkg.storeId) : null;
+    return { p, q, suggest, cost, amount: suggest * cost, store: store ? store.name : "未归属" };
+  }).filter(x => x.suggest > 0)
+    .sort((a, b) => (b.amount - a.amount) || (a.p.name || "").localeCompare(b.p.name || "", "zh"));
+}
+function renderProcure() {
+  const view = document.getElementById("procureView");
+  const items = procureItems();
+  const low = Number(alertCfg.lowStock) || 0;
+  const target = procureTarget();
+  const multi = Number(alertCfg.procureMultiplier) || 2;
+  const head = `<div class="rp-head"><div><h2>🛒 采购清单（按供应商 / 品类汇总）</h2><p class="rp-sub">基于「库存预警」低库存阈值（≤${low} 件）自动汇总 · 目标库存 = 阈值 × ${multi}（${target} 件）· 建议补货量 = 目标 − 当前 · 预计金额 = 补货量 × 进货单价</p></div>
+    <div class="rp-controls">
+      <button class="btn" data-action="procure-xlsx">导出 Excel</button>
+      <button class="btn" data-action="procure-copy">复制清单</button>
+      <button class="btn" data-action="procure-back">← 返回理货</button>
+    </div></div>`;
+  if (items.length === 0) {
+    view.innerHTML = head + `<div class="rp-empty">当前没有需要补货的产品（所有产品库存都高于低库存阈值 ≤${low} 件）。调低阈值或库存下降后，这里会自动汇总。</div>`;
+    return;
+  }
+  const stores = [...new Set(items.map(x => x.store))];
+  const totalAmount = items.reduce((s, x) => s + x.amount, 0);
+  const totalQty = items.reduce((s, x) => s + x.suggest, 0);
+  const groupsHtml = stores.map(sn => {
+    const rows = items.filter(x => x.store === sn);
+    const gAmount = rows.reduce((s, x) => s + x.amount, 0);
+    const gQty = rows.reduce((s, x) => s + x.suggest, 0);
+    const rowsHtml = rows.map(x => `<div class="clr-item">
+      <div class="clr-name">${esc(x.p.name || "未命名产品")}${x.p.category ? ` <span class="tag cat">${esc(x.p.category)}</span>` : ""} <span class="alert-tag alert-low">库存 ${x.q}</span></div>
+      <div class="clr-meta">建议补货 <b>${x.suggest}</b> 件 · 进货单价 ${money(x.cost)} · 预计金额 ${money(x.amount)}${x.p.barcode ? ` · 条码 ${esc(x.p.barcode)}` : ""}</div>
+    </div>`).join("");
+    return `<div class="prc-group"><h4>🏬 ${esc(sn)} <span class="rp-muted">（${rows.length} 种 · 补 ${gQty} 件 · 约 ${money(gAmount)}）</span></h4>
+      <div class="clr-list">${rowsHtml}</div></div>`;
+  }).join("");
+  const catMap = new Map();
+  items.forEach(x => {
+    const c = x.p.category || "未分类";
+    if (!catMap.has(c)) catMap.set(c, { n: 0, qty: 0, amount: 0 });
+    const g = catMap.get(c); g.n++; g.qty += x.suggest; g.amount += x.amount;
+  });
+  const catRows = [...catMap.entries()].sort((a, b) => b[1].amount - a[1].amount)
+    .map(([c, g]) => `<div class="clr-item"><div class="clr-name">${esc(c)}</div>
+      <div class="clr-meta">需补 ${g.n} 种 · 建议补 ${g.qty} 件 · 预计金额 ${money(g.amount)}</div></div>`).join("");
+  view.innerHTML = head + `
+    <div class="prc-cards">
+      <div class="prc-card"><div class="prc-num">${stores.length}</div><div class="prc-cap">需采购的供应商</div></div>
+      <div class="prc-card"><div class="prc-num">${items.length}<span class="rp-den">种/${totalQty}件</span></div><div class="prc-cap">需补货产品</div></div>
+      <div class="prc-card"><div class="prc-num">${money(totalAmount)}</div><div class="prc-cap">预计采购金额</div></div>
+    </div>
+    ${groupsHtml}
+    <div class="prc-group"><h4>📦 按品类汇总</h4><div class="clr-list">${catRows}</div></div>`;
+}
+function openProcure() {
+  document.getElementById("storeList").hidden = true;
+  const bar = document.getElementById("alertBar");
+  if (bar) bar.hidden = true;
+  const gs = document.getElementById("globalScan");
+  if (gs) gs.hidden = true;
+  document.getElementById("procureView").hidden = false;
+  setNavActive("procure");
+  renderProcure();
+}
+function closeProcure() {
+  document.getElementById("procureView").hidden = true;
+  document.getElementById("storeList").hidden = false;
+  const gs = document.getElementById("globalScan");
+  if (gs) gs.hidden = false;
+  renderAlerts();
+}
+function procureRows() {
+  return procureItems().map(x => ({
+    供应商: x.store, 品类: x.p.category || "未分类", 产品名称: x.p.name || "未命名产品",
+    当前库存: x.q, 建议补货量: x.suggest, 进货单价: x.cost, 预计金额: Math.round(x.amount * 100) / 100
+  }));
+}
+function procExportXlsx() {
+  const items = procureItems();
+  if (items.length === 0) { toast("没有需要补货的产品"); return; }
+  const rows = procureRows();
+  const catMap = new Map();
+  items.forEach(x => {
+    const c = x.p.category || "未分类";
+    if (!catMap.has(c)) catMap.set(c, { n: 0, qty: 0, amount: 0 });
+    const g = catMap.get(c); g.n++; g.qty += x.suggest; g.amount += x.amount;
+  });
+  const catRows = [...catMap.entries()].map(([c, g]) => ({ 品类: c, 需补产品数: g.n, 建议补货量: g.qty, 预计金额: Math.round(g.amount * 100) / 100 }));
+  if (typeof XLSX === "undefined") {
+    const lines = [["供应商", "品类", "产品名称", "当前库存", "建议补货量", "进货单价", "预计金额"].join(",")];
+    rows.forEach(r => lines.push([r.供应商, r.品类, r.产品名称, r.当前库存, r.建议补货量, r.进货单价, r.预计金额].map(v => { v = String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? `"${v}"` : v; }).join(",")));
+    downloadBlob(new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" }), `采购清单_${dateStr()}.csv`);
+    toast("已导出 CSV（表格库未加载）");
+    return;
+  }
+  const storeGroups = new Map();
+  rows.forEach(r => {
+    if (!storeGroups.has(r.供应商)) storeGroups.set(r.供应商, []);
+    storeGroups.get(r.供应商).push(r);
+  });
+  const wb = XLSX.utils.book_new();
+  const totalAmount = items.reduce((s, x) => s + x.amount, 0);
+  const totalQty = items.reduce((s, x) => s + x.suggest, 0);
+  const overview = [
+    { 指标: "生成日期", 数值: dateStr() },
+    { 指标: "需采购供应商数", 数值: storeGroups.size },
+    { 指标: "需补货产品数", 数值: rows.length },
+    { 指标: "建议补货总量", 数值: totalQty },
+    { 指标: "预计采购总额", 数值: Math.round(totalAmount * 100) / 100 }
+  ];
+  const supSummary = [...storeGroups.entries()].map(([sn, rr]) => ({
+    供应商: sn, 需补种数: rr.length,
+    建议补货量: rr.reduce((s, r) => s + r.建议补货量, 0),
+    预计金额: Math.round(rr.reduce((s, r) => s + r.预计金额, 0) * 100) / 100
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(overview), "总览");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(supSummary), "按供应商汇总");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), "品类汇总");
+  const used = new Set(["总览", "按供应商汇总", "品类汇总"]);
+  storeGroups.forEach((rr, sn) => {
+    let sheetName = sanitizeSheet(sn);
+    let n = sheetName, k = 2;
+    while (used.has(n)) { n = sheetName + " " + k; k++; }
+    used.add(n);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rr), n);
+  });
+  XLSX.writeFile(wb, `采购清单_${dateStr()}.xlsx`);
+  toast("已导出 Excel（总览 + 每供应商一个 sheet）");
+}
+async function procCopy() {
+  const items = procureItems();
+  if (items.length === 0) { toast("没有需要补货的产品"); return; }
+  const lines = ["采购清单（" + new Date().toLocaleDateString() + "）", "目标库存 = 低库存阈值 × " + (Number(alertCfg.procureMultiplier) || 2) + "，建议补货量 = 目标 − 当前", ""];
+  let curStore = null;
+  items.forEach(x => {
+    if (x.store !== curStore) { curStore = x.store; lines.push("【" + x.store + "】"); }
+    lines.push(`${x.p.name || "未命名产品"}（${x.p.category || "未分类"}） 现库存${x.q} 建议补${x.suggest}件 单价${x.cost.toFixed(2)} 预计${x.amount.toFixed(2)}`);
+  });
+  const total = items.reduce((s, x) => s + x.amount, 0);
+  lines.push("", "预计采购总额：" + total.toFixed(2) + " 元");
+  const text = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("清单已复制到剪贴板");
+  } catch (e) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      toast("清单已复制");
+    } catch (e2) { toast("复制失败，请手动选择复制"); }
+  }
+}
+
+/* ---------- 供应商季度复盘 ---------- */
+function qKeyOfTs(ts) {
+  const d = new Date(ts);
+  return d.getFullYear() + "-Q" + (Math.floor(d.getMonth() / 3) + 1);
+}
+function qRange(qKey) {
+  const [y, q] = qKey.split("-Q").map(Number);
+  const sm = (q - 1) * 3;
+  return { start: new Date(y, sm, 1).getTime(), end: new Date(y, sm + 3, 1).getTime() };
+}
+function qLabel(qKey) {
+  const [y, q] = qKey.split("-Q").map(Number);
+  const names = ["1-3月", "4-6月", "7-9月", "10-12月"];
+  return y + "年 第" + q + "季度（" + (names[q - 1] || "") + "）";
+}
+function prevQuarter(qKey) {
+  const [y, q] = qKey.split("-Q").map(Number);
+  return q > 1 ? y + "-Q" + (q - 1) : (y - 1) + "-Q4";
+}
+function qvMoneyCard(label, cur, prev, prevLabel) {
+  const d = Math.round((Number(cur) - Number(prev)) * 100) / 100;
+  const delta = d > 0 ? `<span class="rp-up">▲ +${money(d)}</span>` : d < 0 ? `<span class="rp-down">▼ ${money(d)}</span>` : `<span class="rp-flat">— 持平</span>`;
+  return `<div class="rp-card"><div class="rp-num">${money(cur)}</div><div class="rp-cap">${label}</div><div class="rp-delta">${delta} <span class="rp-muted">vs ${prevLabel}</span></div></div>`;
+}
+function quarterOptions() {
+  const set = new Set([qKeyOfTs(Date.now())]);
+  state.products.forEach(p => {
+    if (p.createdAt) set.add(qKeyOfTs(p.createdAt));
+    (p.stockLog || []).forEach(e => { if (e && e.at) set.add(qKeyOfTs(e.at)); });
+  });
+  return [...set].sort();
+}
+function quarterCurrent() {
+  const sel = document.getElementById("quarterSelect");
+  return sel && sel.value ? sel.value : qKeyOfTs(Date.now());
+}
+function analyzeQuarter(qKey) {
+  const { start, end } = qRange(qKey);
+  return state.stores.map(store => {
+    const pkgs = state.packages.filter(p => p.storeId === store.id);
+    const prods = state.products.filter(p => pkgs.some(k => k.id === p.packageId));
+    let restockCount = 0, restockQty = 0, restockCost = 0;
+    prods.forEach(p => {
+      restockLog(p).forEach(e => {
+        if (e.at >= start && e.at < end) {
+          restockCount++;
+          restockQty += Number(e.qty) || 0;
+          restockCost += (Number(e.qty) || 0) * (Number(p.purchasePrice) || 0);
+        }
+      });
+    });
+    const invCost = prods.reduce((s, p) => s + (Number(p.purchasePrice) || 0) * (Number(p.quantity) || 0), 0);
+    const retail = prods.reduce((s, p) => s + (Number(p.retailPrice) || 0) * (Number(p.quantity) || 0), 0);
+    const profit = prods.reduce((s, p) => s + productProfit(p) * (Number(p.quantity) || 0), 0);
+    const margin = retail > 0 ? profit / retail : 0;
+    const newSkus = prods.filter(p => p.createdAt && p.createdAt >= start && p.createdAt < end).length;
+    const activeSkus = prods.filter(p => restockLog(p).some(e => e.at >= start && e.at < end)).length;
+    return { store, pkgs: pkgs.length, skus: prods.length, restockCount, restockQty, restockCost, invCost, retail, profit, margin, newSkus, activeSkus, idleSkus: prods.length - activeSkus };
+  }).filter(r => r.skus > 0 || r.restockCount > 0 || r.pkgs > 0);
+}
+function qvSuggestion(r) {
+  if (r.restockCount === 0) return "本期未补货，若库存已消耗且无需求，可考虑清退或暂停合作";
+  if (r.margin < 0) return "预计毛利为负，建议重新谈进货价或做促销清仓";
+  if (r.skus > 0 && r.idleSkus / r.skus > 0.5) return "积压 SKU 过半，减少新品尝试并优先清库存";
+  return "补货正常，按采购清单维持跟进";
+}
+function renderQuarter(qKey) {
+  const view = document.getElementById("quarterView");
+  const rows = analyzeQuarter(qKey);
+  const selOpts = quarterOptions().map(k => `<option value="${k}" ${k === qKey ? "selected" : ""}>${qLabel(k)}</option>`).join("");
+  const head = `<div class="rp-head"><div><h2>🗓 供应商季度复盘</h2><p class="rp-sub">按「补货记录 + 当前库存」统计 · 毛利为现有库存预计值 · 数据来自本机</p></div>
+    <div class="rp-controls">
+      <label class="rp-month">季度 <select id="quarterSelect">${selOpts}</select></label>
+      <button class="btn" data-action="quarter-xlsx">导出 Excel</button>
+      <button class="btn" data-action="quarter-img">导出图片</button>
+      <button class="btn" data-action="quarter-pdf">导出 PDF</button>
+      <button class="btn" data-action="quarter-back">← 返回理货</button>
+    </div></div>`;
+  if (rows.length === 0) {
+    view.innerHTML = head + `<div class="rp-empty">该季度还没有供应商数据。录入供应商、包裹和产品并扫码入库后，这里会自动生成复盘。</div>`;
+    return;
+  }
+  rows.sort((a, b) => (b.profit - a.profit) || (b.restockCost - a.restockCost));
+  const totalRestockCost = rows.reduce((s, r) => s + r.restockCost, 0);
+  const totalRestockCount = rows.reduce((s, r) => s + r.restockCount, 0);
+  const totalRestockQty = rows.reduce((s, r) => s + r.restockQty, 0);
+  const totalActive = rows.reduce((s, r) => s + r.activeSkus, 0);
+  const totalInvCost = rows.reduce((s, r) => s + r.invCost, 0);
+  const totalRetail = rows.reduce((s, r) => s + r.retail, 0);
+  const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
+  const totalMargin = totalRetail > 0 ? totalProfit / totalRetail : 0;
+  const cards = `
+    <div class="rp-cards">
+      <div class="rp-card"><div class="rp-num">${money(totalRestockCost)}</div><div class="rp-cap">本期补货成本（${qLabel(qKey)}）</div></div>
+      <div class="rp-card"><div class="rp-num">${money(totalInvCost)}</div><div class="rp-cap">当前库存货值</div></div>
+      <div class="rp-card"><div class="rp-num">${money(totalRetail)}</div><div class="rp-cap">预计零售总额</div></div>
+      <div class="rp-card"><div class="rp-num">${money(totalProfit)}</div><div class="rp-cap">预计毛利（${pct(totalMargin)}）</div></div>
+    </div>`;
+  const prevQKey = prevQuarter(qKey);
+  const prevRows = analyzeQuarter(prevQKey);
+  const prevById = new Map(prevRows.map(r => [r.store.id, r]));
+  const prevRestockCost = prevRows.reduce((s, r) => s + r.restockCost, 0);
+  const prevRestockCount = prevRows.reduce((s, r) => s + r.restockCount, 0);
+  const prevRestockQty = prevRows.reduce((s, r) => s + r.restockQty, 0);
+  const prevActive = prevRows.reduce((s, r) => s + r.activeSkus, 0);
+  const prev2QKey = prevQuarter(prevQKey);
+  const prev2Rows = analyzeQuarter(prev2QKey);
+  const prev2RestockCost = prev2Rows.reduce((s, r) => s + r.restockCost, 0);
+  const max3 = Math.max(1, prev2RestockCost, prevRestockCost, totalRestockCost);
+  const qChart = `
+    <h4>近三季补货成本</h4>
+    <div class="rp-bars">
+      ${rpBar(qLabel(prev2QKey), prev2RestockCost, max3, money(prev2RestockCost))}
+      ${rpBar(qLabel(prevQKey), prevRestockCost, max3, money(prevRestockCost))}
+      ${rpBar(qLabel(qKey), totalRestockCost, max3, money(totalRestockCost))}
+    </div>`;
+  const newSuppliers = rows.filter(r => r.restockCount > 0 && (!prevById.has(r.store.id) || prevById.get(r.store.id).restockCount === 0));
+  const stoppedSuppliers = rows.filter(r => r.restockCount === 0 && prevById.has(r.store.id) && prevById.get(r.store.id).restockCount > 0);
+  const supList = (arr) => arr.length ? arr.map(r => `<li>${esc(r.store.name)}</li>`).join("") : `<div class="rp-empty">无</div>`;
+  const momNote = (prevRestockCount === 0)
+    ? `<p class="rp-note">上一季度（${qLabel(prevQKey)}）没有补货记录，因此本季度补货均为新增，「停补」为空属正常。</p>`
+    : `<p class="rp-note">对比前两季（${qLabel(prev2QKey)} / ${qLabel(prevQKey)}）同口径：补货成本 / 次数 / 件数 / 动销 SKU。涨跌不代表好坏，需结合销量判断。</p>`;
+  const momHtml = `
+    <h3>📈 环比前两季（${qLabel(prev2QKey)} / ${qLabel(prevQKey)} / ${qLabel(qKey)}）</h3>
+    ${momNote}
+    <div class="rp-cards">
+      ${qvMoneyCard("补货成本", totalRestockCost, prevRestockCost, qLabel(prevQKey))}
+      ${rpCmpCard("补货次数", totalRestockCount, prevRestockCount, qLabel(prevQKey))}
+      ${rpCmpCard("补货件数", totalRestockQty, prevRestockQty, qLabel(prevQKey))}
+      ${rpCmpCard("动销 SKU", totalActive, prevActive, qLabel(prevQKey))}
+    </div>
+    ${qChart}
+    <div class="rp-two">
+      <div><h4>本季新增补货供应商 · ${newSuppliers.length} 个</h4><ul class="rp-list">${supList(newSuppliers)}</ul></div>
+      <div><h4>本季停补（上季进、本季没进）· ${stoppedSuppliers.length} 个</h4><ul class="rp-list">${supList(stoppedSuppliers)}</ul></div>
+    </div>`;
+  const list = rows.map((r, i) => {
+    const rankCls = i < 3 ? "top" : "";
+    return `<div class="clr-item">
+      <div class="clr-name"><span class="qv-rank ${rankCls}">第${i + 1}名</span> ${esc(r.store.name)}${r.skus ? ` <span class="tag cat">${r.skus} SKU</span>` : ""}</div>
+      <div class="qv-meta-line">本期补货 <b>${r.restockCount}</b> 次 / ${r.restockQty} 件（约 ${money(r.restockCost)}）· 新进 SKU ${r.newSkus} · 动销 ${r.activeSkus}/${r.skus} · 包裹 ${r.pkgs}</div>
+      <div class="qv-meta-line">库存货值 ${money(r.invCost)} · 预计毛利 <b style="color:${r.profit < 0 ? "var(--loss)" : "var(--profit)"}">${money(r.profit)}</b>（${pct(r.margin)}）</div>
+      <div class="qv-tip rp-note">💡 ${esc(qvSuggestion(r))}</div>
+    </div>`;
+  }).join("");
+  const tips = [];
+  const top = rows[0];
+  if (top && top.profit > 0) tips.push(`「${esc(top.store.name)}」是本季度毛利贡献第一（${money(top.profit)}），建议列为<strong>主力供应商</strong>，优先保证货源与上新节奏。`);
+  const worst = rows[rows.length - 1];
+  if (worst && worst.profit <= 0 && worst.restockCount > 0) tips.push(`「${esc(worst.store.name)}」预计毛利 ${money(worst.profit)} 为负，建议<strong>重新谈进货价或压缩订货量</strong>。`);
+  const dead = rows.filter(r => r.restockCount === 0 && r.skus > 0);
+  if (dead.length) tips.push(`${dead.length} 个供应商本季度<strong>没有补货</strong>（${dead.map(d => "「" + esc(d.store.name) + "」").join("、")}），若库存已消耗完且无需求，可考虑<strong>清退或暂停合作</strong>。`);
+  const idleSum = rows.reduce((s, r) => s + r.idleSkus, 0);
+  if (idleSum > 0) tips.push(`全季度有 ${idleSum} 个 SKU 从未补货，多为滞销或一次性采购，建议结合「清仓清单」处理。`);
+  if (!tips.length) tips.push("该季度整体平稳，可按半月报与采购清单继续维持。");
+  view.innerHTML = head + cards + momHtml + `
+    <h3>🏆 供应商排名（按预计毛利）</h3>
+    <div class="clr-list">${list}</div>
+    <h3>💡 本季度策略建议</h3>
+    <ul class="rp-tips">${tips.map(t => `<li>${t}</li>`).join("")}</ul>`;
+}
+function openQuarter() {
+  document.getElementById("storeList").hidden = true;
+  const bar = document.getElementById("alertBar");
+  if (bar) bar.hidden = true;
+  const gs = document.getElementById("globalScan");
+  if (gs) gs.hidden = true;
+  document.getElementById("quarterView").hidden = false;
+  const qs = quarterOptions();
+  renderQuarter(qs.length ? qs[qs.length - 1] : qKeyOfTs(Date.now()));
+}
+function closeQuarter() {
+  document.getElementById("quarterView").hidden = true;
+  document.getElementById("storeList").hidden = false;
+  const gs = document.getElementById("globalScan");
+  if (gs) gs.hidden = false;
+  renderAlerts();
+}
+document.getElementById("quarterView").addEventListener("change", (e) => {
+  if (e.target && e.target.id === "quarterSelect") renderQuarter(e.target.value);
+});
+function sanitizeSheet(name) {
+  let s = String(name || "供应商").replace(/[\\\[\]:*?\/]/g, "").trim();
+  if (!s) s = "供应商";
+  return s.slice(0, 31) || "供应商";
+}
+function quarterExportXlsx() {
+  const qKey = quarterCurrent();
+  const rows = analyzeQuarter(qKey).sort((a, b) => (b.profit - a.profit) || (b.restockCost - a.restockCost));
+  if (rows.length === 0) { toast("该季度没有供应商数据"); return; }
+  const rg = qRange(qKey);
+  const totalRestockCost = rows.reduce((s, r) => s + r.restockCost, 0);
+  const totalInvCost = rows.reduce((s, r) => s + r.invCost, 0);
+  const totalRetail = rows.reduce((s, r) => s + r.retail, 0);
+  const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
+  if (typeof XLSX === "undefined") {
+    const csv = (arr) => arr.map(v => { v = String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? `"${v}"` : v; }).join(",");
+    const lines = [];
+    lines.push("季度复盘（" + qLabel(qKey) + "）");
+    lines.push(csv(["指标", "数值"]));
+    lines.push(csv(["复盘季度", qLabel(qKey)]));
+    lines.push(csv(["供应商数", rows.length]));
+    lines.push(csv(["本期补货成本", totalRestockCost.toFixed(2)]));
+    lines.push(csv(["当前库存货值", totalInvCost.toFixed(2)]));
+    lines.push(csv(["预计零售总额", totalRetail.toFixed(2)]));
+    lines.push(csv(["预计毛利", totalProfit.toFixed(2)]));
+    lines.push(csv(["整体毛利率", pct(totalRetail > 0 ? totalProfit / totalRetail : 0)]));
+    lines.push("");
+    lines.push("供应商排名（按预计毛利）");
+    lines.push(csv(["排名", "供应商", "SKU数", "补货次数", "补货件数", "补货成本", "库存货值", "预计毛利", "毛利率"]));
+    rows.forEach((r, i) => lines.push(csv([i + 1, r.store.name, r.skus, r.restockCount, r.restockQty, r.restockCost.toFixed(2), r.invCost.toFixed(2), r.profit.toFixed(2), pct(r.margin)])));
+    rows.forEach(r => {
+      lines.push("");
+      lines.push("【" + r.store.name + "】产品明细");
+      lines.push(csv(["产品名称", "类别", "数量", "进货单价", "零售价", "单件毛利", "毛利率", "小计零售", "本季补货次数", "本季补货件数"]));
+      const prods = state.products.filter(p => state.packages.some(k => k.id === p.packageId && k.storeId === r.store.id));
+      prods.forEach(p => {
+        const q = Number(p.quantity) || 0;
+        const profit = productProfit(p);
+        const qr = restockLog(p).filter(e => e.at >= rg.start && e.at < rg.end);
+        lines.push(csv([p.name || "未命名产品", p.category || "", q, (Number(p.purchasePrice) || 0).toFixed(2), (Number(p.retailPrice) || 0).toFixed(2), profit.toFixed(2), pct(productMargin(p)), ((Number(p.retailPrice) || 0) * q).toFixed(2), qr.length, qr.reduce((s, e) => s + (Number(e.qty) || 0), 0)]));
+      });
+    });
+    downloadBlob(new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" }), `季度复盘_${qKey}.csv`);
+    toast("已导出 CSV（表格库未加载）");
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  const overviewRows = [
+    { 指标: "复盘季度", 数值: qLabel(qKey) },
+    { 指标: "供应商数", 数值: rows.length },
+    { 指标: "本期补货成本", 数值: Math.round(totalRestockCost * 100) / 100 },
+    { 指标: "当前库存货值", 数值: Math.round(totalInvCost * 100) / 100 },
+    { 指标: "预计零售总额", 数值: Math.round(totalRetail * 100) / 100 },
+    { 指标: "预计毛利", 数值: Math.round(totalProfit * 100) / 100 },
+    { 指标: "整体毛利率", 数值: pct(totalRetail > 0 ? totalProfit / totalRetail : 0) }
+  ];
+  const rankRows = rows.map((r, i) => ({ 排名: i + 1, 供应商: r.store.name, "SKU数": r.skus, "补货次数": r.restockCount, "补货件数": r.restockQty, "补货成本": Math.round(r.restockCost * 100) / 100, "库存货值": Math.round(r.invCost * 100) / 100, "预计毛利": Math.round(r.profit * 100) / 100, "毛利率": pct(r.margin), "新进SKU": r.newSkus, "动销SKU": r.activeSkus, "积压SKU": r.idleSkus }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(overviewRows), "总览");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rankRows), "供应商排名");
+  const used = new Set(["总览", "供应商排名"]);
+  rows.forEach(r => {
+    const prods = state.products.filter(p => state.packages.some(k => k.id === p.packageId && k.storeId === r.store.id));
+    const detail = prods.map(p => {
+      const q = Number(p.quantity) || 0;
+      const cost = productCost(p), profit = productProfit(p), margin = productMargin(p);
+      const qr = restockLog(p).filter(e => e.at >= rg.start && e.at < rg.end);
+      return {
+        产品名称: p.name || "未命名产品", 类别: p.category || "", 型号: p.model || "",
+        数量: q, 进货单价: Number(p.purchasePrice) || 0, 零售价: Number(p.retailPrice) || 0,
+        单件成本含运费: Math.round(cost * 100) / 100, 单件毛利: Math.round(profit * 100) / 100, 毛利率: pct(margin),
+        小计零售: Math.round((Number(p.retailPrice) || 0) * q * 100) / 100, 小计毛利: Math.round(profit * q * 100) / 100,
+        本季补货次数: qr.length, 本季补货件数: qr.reduce((s, e) => s + (Number(e.qty) || 0), 0)
+      };
+    });
+    let sheetName = sanitizeSheet(r.store.name);
+    let n = sheetName, k = 2;
+    while (used.has(n)) { n = sheetName + " " + k; k++; }
+    used.add(n);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), n);
+  });
+  XLSX.writeFile(wb, `季度复盘_${qKey}.xlsx`);
+  toast("已导出 Excel（每个供应商一个 sheet）");
+}
+
+/* ---------- 半月报导出（图片 / PDF） ---------- */
+function reportMonthValue() {
+  const inp = document.getElementById("reportMonth");
+  return inp ? inp.value : "";
+}
+async function captureElement(el) {
+  if (!el) return null;
+  const controls = el.querySelector(".rp-controls");
+  const prev = controls ? controls.style.display : "";
+  if (controls) controls.style.display = "none";
+  try {
+    return await html2canvas(el, { backgroundColor: "#f4f6f9", scale: 2, useCORS: true, logging: false });
+  } finally {
+    if (controls) controls.style.display = prev;
+  }
+}
+function exportUnavailable(kind) {
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  const why = offline ? "当前处于离线状态（未联网）" : "绘图组件未加载（可能被网络拦截，或首次打开时未联网加载）";
+  return `「${kind}」导出需要联网加载绘图组件（html2canvas / jsPDF），${why}，暂不可用。` + (offline ? "建议联网后重试。" : "");
+}
+function exportOfflineFallback(kind) {
+  let action = null;
+  if (!document.getElementById("reportView").hidden) action = reportExportXlsx;
+  else if (!document.getElementById("quarterView").hidden) action = quarterExportXlsx;
+  else if (!document.getElementById("procureView").hidden) action = procExportXlsx;
+  else if (!document.getElementById("clearanceView").hidden) action = clearanceCopy;
+  const msg = exportUnavailable(kind);
+  if (action) {
+    openConfirm({ title: "无法导出" + kind, message: msg + "\n\n是否改用「Excel / CSV 导出」？CSV 无需联网，内容同样完整。", okText: "改用导出", cancelText: "取消" }).then(ok => { if (ok) action(); });
+  } else {
+    openConfirm({ title: "无法导出" + kind, message: msg, okText: "知道了" });
+  }
+}
+async function exportImage(el, name) {
+  if (typeof html2canvas === "undefined") { exportOfflineFallback("图片"); return; }
+  toast("正在生成图片…");
+  try {
+    const canvas = await captureElement(el);
+    if (!canvas) return;
+    canvas.toBlob((blob) => { if (blob) downloadBlob(blob, name + ".png"); }, "image/png");
+    toast("已导出图片");
+  } catch (e) { console.error(e); toast("图片导出失败"); }
+}
+async function exportPdf(el, name) {
+  if (typeof html2canvas === "undefined" || !window.jspdf || !window.jspdf.jsPDF) { exportOfflineFallback("PDF"); return; }
+  toast("正在生成 PDF…");
+  try {
+    const canvas = await captureElement(el);
+    if (!canvas) return;
+    const img = canvas.toDataURL("image/png");
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF("p", "mm", "a4");
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
+    const imgW = pw;
+    const imgH = canvas.height * imgW / canvas.width;
+    let heightLeft = imgH;
+    let position = 0;
+    pdf.addImage(img, "PNG", 0, position, imgW, imgH);
+    heightLeft -= ph;
+    while (heightLeft > 0) {
+      position -= ph;
+      pdf.addPage();
+      pdf.addImage(img, "PNG", 0, position, imgW, imgH);
+      heightLeft -= ph;
+    }
+    pdf.save(name + ".pdf");
+    toast("已导出 PDF");
+  } catch (e) { console.error(e); toast("PDF 导出失败"); }
+}
+
+/* 半月报导出 Excel（总览 + TOP + 选品维度 + 每供应商一个 sheet，与季度复盘同规格） */
+function reportExportXlsx() {
+  const ym = reportMonthValue();
+  if (!ym) { toast("请先选择月份"); return; }
+  const rows = analyzeMonth(ym);
+  if (rows.length === 0) { toast("该月份没有产品数据"); return; }
+  const p1Total = sum(rows, r => r.p1c), p2Total = sum(rows, r => r.p2c);
+  const restedProducts = rows.filter(r => r.tc > 0).length;
+  const neverRestock = rows.filter(r => !r.everRestock);
+  const totalQty = sum(rows, r => r.tq);
+  const trendyRows = rows.filter(r => TRENDY_CATS.includes(r.p.category));
+  const normalRows = rows.filter(r => !TRENDY_CATS.includes(r.p.category));
+  const top = rows.filter(r => r.tc > 0).sort((a, b) => b.tc - a.tc || b.tq - a.tq).map((r, i) => {
+    const phase = (r.p1c > 0 && r.p2c > 0) ? "两阶段都进" : (r.p1c > 0 ? "主要在1-15号" : "主要在16-31号");
+    return { 排名: i + 1, 产品: r.p.name || "未命名产品", 类别: r.p.category || "", "P1次数": r.p1c, "P2次数": r.p2c, 本月次数: r.tc, 补货件数: r.tq, 补货阶段: phase };
+  });
+  const storeMap = new Map();
+  rows.forEach(r => {
+    const pkg = state.packages.find(x => x.id === r.p.packageId);
+    const store = pkg ? state.stores.find(s => s.id === pkg.storeId) : null;
+    const sn = store ? store.name : "未归属";
+    if (!storeMap.has(sn)) storeMap.set(sn, []);
+    storeMap.get(sn).push(r);
+  });
+  const catAgg = groupBy(rows, r => productCat(r.p), restockAgg).sort((a, b) => (b.p1 + b.p2) - (a.p1 + a.p2));
+  const priceAgg = groupBy(rows, r => priceTier(Number(r.p.retailPrice) || 0), restockAgg).sort((a, b) => PRICE_ORDER.indexOf(a.key) - PRICE_ORDER.indexOf(b.key));
+  const trendyAgg = groupBy(rows, r => TRENDY_CATS.includes(r.p.category) ? "潮流类" : "常规类", restockAgg);
+  if (typeof XLSX === "undefined") {
+    const csv = (arr) => arr.map(v => { v = String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? `"${v}"` : v; }).join(",");
+    const lines = [];
+    lines.push("半月报（" + ym + "）");
+    lines.push(csv(["指标", "数值"]));
+    lines.push(csv(["复盘月份", ym]));
+    lines.push(csv(["1-15号补货次数", p1Total]));
+    lines.push(csv(["16-31号补货次数", p2Total]));
+    lines.push(csv(["有补货的产品", restedProducts]));
+    lines.push(csv(["从未补货的产品", neverRestock.length]));
+    lines.push(csv(["补货总件数", totalQty]));
+    lines.push(csv(["潮流类补货(次/件)", sum(trendyRows, r => r.tc) + " / " + sum(trendyRows, r => r.tq)]));
+    lines.push(csv(["常规类补货(次/件)", sum(normalRows, r => r.tc) + " / " + sum(normalRows, r => r.tq)]));
+    lines.push("");
+    lines.push("进货频繁 TOP");
+    lines.push(csv(["排名", "产品", "类别", "P1次数", "P2次数", "本月次数", "补货件数"]));
+    top.forEach(r => lines.push(csv([r.排名, r.产品, r.类别, r.P1次数, r.P2次数, r.本月次数, r.补货件数])));
+    storeMap.forEach((rrs, sn) => {
+      lines.push("");
+      lines.push("【" + sn + "】产品明细");
+      lines.push(csv(["产品名称", "类别", "数量", "进货单价", "零售价", "单件毛利", "小计零售", "本月补货次数", "本月补货件数", "到期日"]));
+      rrs.forEach(r => {
+        const p = r.p, q = Number(p.quantity) || 0;
+        lines.push(csv([p.name || "未命名产品", p.category || "", q, (Number(p.purchasePrice) || 0).toFixed(2), (Number(p.retailPrice) || 0).toFixed(2), productProfit(p).toFixed(2), ((Number(p.retailPrice) || 0) * q).toFixed(2), r.tc, r.tq, p.expiry || ""]));
+      });
+    });
+    downloadBlob(new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" }), `半月报_${ym}.csv`);
+    toast("已导出 CSV（表格库未加载）");
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  const overview = [
+    { 指标: "复盘月份", 数值: ym },
+    { 指标: "1-15号补货次数", 数值: p1Total },
+    { 指标: "16-31号补货次数", 数值: p2Total },
+    { 指标: "有补货的产品", 数值: restedProducts },
+    { 指标: "从未补货的产品", 数值: neverRestock.length },
+    { 指标: "本月无补货的产品", 数值: rows.filter(r => r.tc === 0).length },
+    { 指标: "补货总件数", 数值: totalQty },
+    { 指标: "潮流类补货(次/件)", 数值: sum(trendyRows, r => r.tc) + " 次 / " + sum(trendyRows, r => r.tq) + " 件" },
+    { 指标: "常规类补货(次/件)", 数值: sum(normalRows, r => r.tc) + " 次 / " + sum(normalRows, r => r.tq) + " 件" }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(overview), "总览");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(top), "进货频繁TOP");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catAgg.map(g => ({ 种类: g.key, 产品数: g.products, "P1次数": g.p1, "P2次数": g.p2, 补货件数: g.q, 补货产品数: g.rested }))), "种类汇总");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(priceAgg.map(g => ({ 价格档: g.key, 产品数: g.products, "P1次数": g.p1, "P2次数": g.p2, 补货件数: g.q, 补货产品数: g.rested }))), "价格档汇总");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(trendyAgg.map(g => ({ 潮流度: g.key, 产品数: g.products, 补货次数: g.p1 + g.p2, 补货件数: g.q, 补货产品数: g.rested }))), "潮流度");
+  const used = new Set(["总览", "进货频繁TOP", "种类汇总", "价格档汇总", "潮流度"]);
+  storeMap.forEach((rrs, sn) => {
+    const detail = rrs.map(r => {
+      const p = r.p, q = Number(p.quantity) || 0;
+      return {
+        产品名称: p.name || "未命名产品", 类别: p.category || "", 数量: q,
+        进货单价: Number(p.purchasePrice) || 0, 零售价: Number(p.retailPrice) || 0,
+        单件毛利: Math.round(productProfit(p) * 100) / 100,
+        小计零售: Math.round((Number(p.retailPrice) || 0) * q * 100) / 100,
+        本月补货次数: r.tc, 本月补货件数: r.tq, 到期日: p.expiry || ""
+      };
+    });
+    let sheetName = sanitizeSheet(sn);
+    let n = sheetName, k = 2;
+    while (used.has(n)) { n = sheetName + " " + k; k++; }
+    used.add(n);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), n);
+  });
+  XLSX.writeFile(wb, `半月报_${ym}.xlsx`);
+  toast("已导出 Excel（总览 + TOP + 每供应商一个 sheet）");
+}
+
+/* ---------- 数据迁移：旧产品补齐 createdAt / stockLog ---------- */
+function migrateState() {
+  if (!state || !Array.isArray(state.products)) return;
+  const now = Date.now();
+  state.products.forEach(p => {
+    if (!p.createdAt) p.createdAt = now;
+    if (!Array.isArray(p.stockLog)) {
+      p.stockLog = [{ at: now, qty: Number(p.quantity) || 0, init: true }];
+    }
+  });
+}
+/* 同一条码去重图片：以该码首个带图产品的图片为准，其余同码产品复用同一张，减少重复存储 */
+function dedupImages() {
+  if (!state || !Array.isArray(state.products)) return false;
+  const byBarcode = new Map();
+  state.products.forEach(p => { if (p.barcode && p.image && !byBarcode.has(p.barcode)) byBarcode.set(p.barcode, p.image); });
+  let changed = false;
+  state.products.forEach(p => {
+    if (p.barcode && byBarcode.has(p.barcode) && p.image !== byBarcode.get(p.barcode)) {
+      p.image = byBarcode.get(p.barcode);
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+/* ---------- 启动 ---------- */
+async function boot() {
+  state = await loadLocal();
+  initSb();
+  if (sbClient) {
+    const remote = await loadRemote();
+    if (remote && remote.data && Array.isArray(remote.data.products)) { state = remote.data; await saveLocal(); }
+  }
+  migrateState();
+  if (dedupImages()) saveLocal();
+  renderAll();
+  setNavActive("home");
+  updateSyncUI();
+}
+boot();
+</script>
+</body>
+</html>
