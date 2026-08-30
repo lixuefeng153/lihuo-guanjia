@@ -4,7 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>理货管家 · 供应商包裹产品理货与毛利核算</title>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="xlsx.full.min.js"></script>
+<script>window.XLSX||document.write('<script src="https://cdn.staticfile.org/xlsx/0.18.5/xlsx.full.min.js"><\/script>')</script>
 <!-- 同步已改为 GitHub 仓库（data/state.json），无需 Supabase -->
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -1392,7 +1393,7 @@ function exportXlsx() {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "理货明细");
   XLSX.utils.book_append_sheet(wb, ws2, "汇总");
-  XLSX.writeFile(wb, `理货数据_${dateStr()}.xlsx`);
+  saveXlsx(wb, `理货数据_${dateStr()}.xlsx`);
   toast("已导出 Excel");
 }
 
@@ -1418,6 +1419,19 @@ function downloadBlob(blob, name) {
   const a = document.createElement("a");
   a.href = url; a.download = name; document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+/* 导出 .xlsx：优先用 XLSX.writeFile（自带下载），失败时退化为 write+blob 下载，
+   与 CSV/JSON 走同一套 downloadBlob 路径，兼容性更好（移动端/沙箱 webview 也能触发下载） */
+function saveXlsx(wb, name) {
+  try {
+    saveXlsx(wb, name);
+  } catch (e) {
+    console.warn("XLSX.writeFile 失败，改用 blob 下载", e);
+    const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+    const blob = new Blob([buf], { type: "application/octet-stream" });
+    downloadBlob(blob, name);
+  }
 }
 
 /* 导出 JSON 备份：完整无损，结构与 IndexedDB 存储一致，导入可 100% 还原 */
@@ -2081,7 +2095,7 @@ function procExportXlsx() {
     used.add(n);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rr), n);
   });
-  XLSX.writeFile(wb, `采购清单_${dateStr()}.xlsx`);
+  saveXlsx(wb, `采购清单_${dateStr()}.xlsx`);
   toast("已导出 Excel（总览 + 每供应商一个 sheet）");
 }
 async function procCopy() {
@@ -2372,7 +2386,7 @@ function quarterExportXlsx() {
     used.add(n);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), n);
   });
-  XLSX.writeFile(wb, `季度复盘_${qKey}.xlsx`);
+  saveXlsx(wb, `季度复盘_${qKey}.xlsx`);
   toast("已导出 Excel（每个供应商一个 sheet）");
 }
 
@@ -2540,7 +2554,7 @@ function reportExportXlsx() {
     used.add(n);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), n);
   });
-  XLSX.writeFile(wb, `半月报_${ym}.xlsx`);
+  saveXlsx(wb, `半月报_${ym}.xlsx`);
   toast("已导出 Excel（总览 + TOP + 每供应商一个 sheet）");
 }
 
