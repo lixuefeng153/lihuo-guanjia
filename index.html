@@ -499,9 +499,10 @@
     <button class="btn" id="authBtn2" data-action="auth">连接同步</button>
   </div>
 
+<script src="https://static.cloudbase.net/cloudbase-js-sdk/latest/cloudbase.full.js"><\/script>
 <script>
 "use strict";
-/* ---------- 存储层 (IndexedDB 本地 + GitHub 云端) ---------- */
+/* ---------- 存储层 (IndexedDB 本地 + CloudBase 云端) ---------- */
 const DB_NAME = "lh_db", STORE = "data", KEY = "app";
 function openDB() {
   return new Promise((res, rej) => {
@@ -530,26 +531,40 @@ async function saveLocal() {
   });
 }
 
-/* ---------- 云端同步：GitHub 仓库（data/state.json） ---------- */
-const LS_GH = "lh_github_cfg";
-/* 数据存到你自己的 GitHub 仓库；token 仅存浏览器本地，绝不硬编码进源码 */
-const DEFAULT_GH = {
-  user: "lixuefeng153",
-  repo: "lihuo-guanjia",
-  path: "data/state.json",
-  token: "",     // GitHub PAT，仅存本浏览器
-  encPwd: ""     // 可选加密密码，空 = 明文
+/* ---------- 云端同步：CloudBase 文档数据库 ---------- */
+const LS_TCB = "lh_tcb_cfg";
+const DEFAULT_TCB = {
+  env: "",
+  accessKey: ""
 };
-let ghCfg = (() => { try { return Object.assign({}, DEFAULT_GH, JSON.parse(localStorage.getItem(LS_GH) || "{}")); } catch (e) { return Object.assign({}, DEFAULT_GH); } })();
-let ghRemoteSha = null;
-function ghHeaders(extra) {
-  const h = Object.assign({ "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" }, extra || {});
-  if (ghCfg.token) h["Authorization"] = "Bearer " + ghCfg.token;
-  return h;
+let tcbCfg = (() => { try { return Object.assign({}, DEFAULT_TCB, JSON.parse(localStorage.getItem(LS_TCB) || "{}")); } catch (e) { return Object.assign({}, DEFAULT_TCB); } })();
+let tcbApp = null;
+let tcbDb = null;
+let tcbUid = null;
+let tcbReady = false;
+
+function tcbInit() {
+  if (!tcbCfg.env || !tcbCfg.accessKey) return false;
+  if (!window.cloudbase) { console.warn("CloudBase SDK 未加载"); return false; }
+  try {
+    tcbApp = window.cloudbase.init({
+      env: tcbCfg.env,
+      accessKey: tcbCfg.accessKey,
+      auth: { detectSessionInUrl: false }
+    });
+    tcbDb = tcbApp.database();
+    return true;
+  } catch (e) { console.warn("CloudBase 初始化失败", e); return false; }
 }
-function ghReady() { return !!(ghCfg.user && ghCfg.repo && ghCfg.token); }
-function ghApi(path, opts) {
-  return fetch("https://api.github.com" + path, Object.assign({ headers: ghHeaders() }, opts));
+async function tcbLogin() {
+  if (!tcbApp) return false;
+  try {
+    const { data, error } = await tcbApp.auth.signInAnonymously();
+    if (error) { console.warn("匿名登录失败", error); return false; }
+    tcbUid = data.user.uid;
+    tcbReady = true;
+    return true;
+  } catch (e) { console.warn("登录异常", e); return false; }
 }
 
 /* ---------- 预警配置与计算 ---------- */
@@ -604,76 +619,38 @@ function openAlertSettings() {
     + `<div class="field"><div class="hint">提示：产品的「到期日」可在新增 / 编辑产品时填写（食品等易过期品类建议填）；清仓折扣与采购倍数只影响建议值，可按实际调整。</div></div>`;
   document.getElementById("f-low").focus();
 }
-/* 可选加密：AES-GCM + PBKDF2（Web Crypto），仓库为公开时也能保护库存数据 */
-async function encState(text) {
-  if (!ghCfg.encPwd) return text;
-  const enc = new TextEncoder();
-  const salt = enc.encode("lh-sync-salt-v1");
-  const baseKey = await crypto.subtle.importKey("raw", enc.encode(ghCfg.encPwd), "PBKDF2", false, ["deriveKey"]);
-  const aesKey = await crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" }, baseKey, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, enc.encode(text)));
-  return "ENC|" + btoa(String.fromCharCode.apply(null, iv)) + "|" + btoa(String.fromCharCode.apply(null, ct));
-}
-async function decState(raw) {
-  if (!raw.startsWith("ENC|")) return raw;
-  if (!ghCfg.encPwd) throw new Error("该数据已加密，需填写加密密码");
-  const parts = raw.slice(4).split("|");
-  const iv = Uint8Array.from(atob(parts[0]), c => c.charCodeAt(0));
-  const ct = Uint8Array.from(atob(parts[1]), c => c.charCodeAt(0));
-  const enc = new TextEncoder();
-  const salt = enc.encode("lh-sync-salt-v1");
-  const baseKey = await crypto.subtle.importKey("raw", enc.encode(ghCfg.encPwd), "PBKDF2", false, ["deriveKey"]);
-  const aesKey = await crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" }, baseKey, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, aesKey, ct);
-  return new TextDecoder().decode(pt);
-}
+/* ---------- CloudBase 数据库读写 ---------- */
 async function loadRemote() {
-  if (!ghReady()) return null;
+  if (!tcbReady || !tcbUid) return null;
   try {
-    const res = await ghApi(`/repos/${ghCfg.user}/${ghCfg.repo}/contents/${ghCfg.path}`);
-    if (res.status === 404) return null;
-    if (!res.ok) { console.warn("loadRemote 状态", res.status); return null; }
-    const j = await res.json();
-    ghRemoteSha = j.sha || null;
-    const raw = decodeURIComponent(escape(atob(j.content.replace(/\s/g, ""))));
-    const text = await decState(raw);
-    return { data: JSON.parse(text) };
+    const res = await tcbDb.collection("lh_state").doc(tcbUid).get();
+    if (res.code || !res.data || !res.data.length) return null;
+    return { data: res.data[0].data };
   } catch (e) { console.warn("loadRemote 失败", e); return null; }
 }
 async function saveRemote() {
-  if (!ghReady()) return false;
+  if (!tcbReady || !tcbUid) return false;
   try {
-    let sha = ghRemoteSha;
-    if (!sha) {
-      const r = await ghApi(`/repos/${ghCfg.user}/${ghCfg.repo}/contents/${ghCfg.path}`);
-      if (r.ok) sha = (await r.json()).sha;
-    }
-    const cipher = await encState(JSON.stringify(state));
-    const content = btoa(unescape(encodeURIComponent(cipher)));
-    const body = { message: "sync: 理货管家自动同步", content };
-    if (sha) body.sha = sha;
-    const res = await ghApi(`/repos/${ghCfg.user}/${ghCfg.repo}/contents/${ghCfg.path}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    const res = await tcbDb.collection("lh_state").doc(tcbUid).set({
+      data: state,
+      updated_at: new Date().toISOString()
     });
-    if (!res.ok) { console.warn("saveRemote 状态", res.status); return false; }
-    const j = await res.json();
-    if (j.content && j.content.sha) ghRemoteSha = j.content.sha;
+    if (typeof res.code === "string") { console.warn("saveRemote 错误", res); return false; }
     return true;
   } catch (e) { console.warn("saveRemote 失败", e); return false; }
 }
 async function saveData() {
   await saveLocal();
-  if (ghReady()) { const ok = await saveRemote(); updateSyncUI(ok); }
+  if (tcbReady) { const ok = await saveRemote(); updateSyncUI(ok); }
 }
 async function updateSyncUI(ok) {
   const el = document.getElementById("syncStatus");
   const btn = document.getElementById("authBtn");
   const btn2 = document.getElementById("authBtn2");
   if (!el || !btn) return;
-  if (!ghReady()) { el.textContent = "未连接同步（点「连接同步」）"; el.className = "sync-status warn"; btn.textContent = "连接同步"; }
-  else if (ok === false) { el.textContent = "同步失败，检查网络 / PAT 权限"; el.className = "sync-status warn"; btn.textContent = "连接同步"; }
-  else { el.textContent = "已同步 · " + ghCfg.user; el.className = "sync-status ok"; btn.textContent = "断开(" + ghCfg.user + ")"; }
+  if (!tcbReady) { el.textContent = "未连接同步（点「连接同步」）"; el.className = "sync-status warn"; btn.textContent = "连接同步"; }
+  else if (ok === false) { el.textContent = "同步失败，检查网络"; el.className = "sync-status warn"; btn.textContent = "连接同步"; }
+  else { el.textContent = "已同步 · CloudBase"; el.className = "sync-status ok"; btn.textContent = "断开"; }
   if (btn2) btn2.textContent = btn.textContent;
 }
 
@@ -1256,37 +1233,33 @@ function openProductForm(packageId, id) {
   });
 }
 
-function openGhConnect() {
-  curEdit = { type: "gh" };
-  openModal("连接 GitHub 同步");
+function openTcbConnect() {
+  curEdit = { type: "tcb" };
+  openModal("连接 CloudBase 同步");
   modalBody.innerHTML =
-    field("GitHub 用户名", "你的 GitHub 账号，如 lixuefeng153", `<input type="text" id="f-user" value="${esc(ghCfg.user || "")}" placeholder="lixuefeng153" />`, "f-user")
-    + field("仓库名", "存放同步数据的仓库（默认 lihuo-guanjia）", `<input type="text" id="f-repo" value="${esc(ghCfg.repo || "")}" placeholder="lihuo-guanjia" />`, "f-repo")
-    + field("Personal Access Token", "需 repo 权限；粘贴一次，仅存本浏览器，不会写入页面源码。到 github.com/settings/tokens 生成（勾选 repo）", `<input type="password" id="f-token" value="" placeholder="ghp_..." />`, "f-token")
-    + field("加密密码（可选）", "填写后用密码加密仓库里的数据，公开仓库也不怕泄露；换设备需使用同一密码", `<input type="password" id="f-enc" value="" placeholder="留空 = 明文" />`, "f-enc")
-    + `<div class="field"><div class="hint">数据将存到仓库的 data/state.json。当前仓库为公开，强烈建议填写「加密密码」保护库存数据。PAT 仅保存在你本机浏览器。</div></div>`;
-  document.getElementById("f-token").focus();
+    field("环境 ID", "CloudBase 环境标识，如 env-xxx", `<input type="text" id="f-env" value="${esc(tcbCfg.env || "")}" placeholder="env-xxxxxxxx" />`, "f-env")
+    + field("可发布密钥", "从 CloudBase 控制台 -> 环境配置 -> API 密钥 获取（Access Key / 可发布密钥，非 SecretKey）", `<input type="password" id="f-key" value="" placeholder="可发布密钥" />`, "f-key")
+    + `<div class="field"><div class="hint">使用 CloudBase 文档数据库存储同步数据，支持匿名登录无需注册账号。首次使用需在控制台开启「匿名登录」并创建 lh_state 集合。</div></div>`;
+  document.getElementById("f-env").focus();
 }
 
 async function saveForm() {
   if (!curEdit) return;
-  if (curEdit.type === "gh") {
-    const user = document.getElementById("f-user").value.trim();
-    const repo = document.getElementById("f-repo").value.trim();
-    const token = document.getElementById("f-token").value.trim();
-    const encPwd = document.getElementById("f-enc").value;
-    if (!user || !repo || !token) { toast("请填写用户名、仓库名和 PAT"); return; }
-    ghCfg = Object.assign({}, ghCfg, { user, repo, token, encPwd });
-    localStorage.setItem(LS_GH, JSON.stringify(ghCfg));
-    const test = await ghApi(`/repos/${user}/${repo}`);
-    if (!test.ok) { toast("连接失败：" + (test.status === 401 ? "PAT 无效或无权限" : "仓库不存在或无权限（" + test.status + "）")); return; }
-    ghRemoteSha = null;
+  if (curEdit.type === "tcb") {
+    const env = document.getElementById("f-env").value.trim();
+    const accessKey = document.getElementById("f-key").value.trim();
+    if (!env || !accessKey) { toast("请填写环境 ID 和可发布密钥"); return; }
+    tcbCfg = Object.assign({}, tcbCfg, { env, accessKey });
+    localStorage.setItem(LS_TCB, JSON.stringify(tcbCfg));
+    if (!tcbInit()) { toast("CloudBase 初始化失败，请检查环境 ID 和密钥"); return; }
+    const loginOk = await tcbLogin();
+    if (!loginOk) { toast("匿名登录失败，请在控制台开启「匿名登录」"); return; }
     const remote = await loadRemote();
     const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
     if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); renderAll(); }
     const ok = await saveRemote();
     closeModal(); updateSyncUI(ok);
-    toast("已连接 GitHub 同步" + (ok ? "，已保存本地数据到云端" : "，保存失败，检查网络"));
+    toast("已连接 CloudBase 同步" + (ok ? "，已保存本地数据到云端" : "，保存失败，检查网络"));
     return;
   }
   if (curEdit.type === "store") {
@@ -1587,27 +1560,25 @@ document.addEventListener("click", (e) => {
     case "quarter-img": exportImage(document.getElementById("quarterView"), `季度复盘_${quarterCurrent()}`); break;
     case "quarter-pdf": exportPdf(document.getElementById("quarterView"), `季度复盘_${quarterCurrent()}`); break;
     case "quarter-xlsx": quarterExportXlsx(); break;
-    case "sb-settings": openGhConnect(); break;
+    case "sb-settings": openTcbConnect(); break;
     case "alert-settings": openAlertSettings(); break;
     case "auth":
       (async () => {
-        if (ghReady()) {
-          ghCfg.token = ""; ghCfg.encPwd = "";
-          localStorage.setItem(LS_GH, JSON.stringify(ghCfg));
-          ghRemoteSha = null;
+        if (tcbReady) {
+          tcbApp = null; tcbDb = null; tcbUid = null; tcbReady = false;
           updateSyncUI(); toast("已断开同步");
-        } else openGhConnect();
+        } else openTcbConnect();
       })();
       break;
     case "sync-now":
       (async () => {
-    if (!ghReady()) { toast("请先点「连接同步」并填写 GitHub PAT"); return; }
-    const remote = await loadRemote();
-    const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
-    if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); renderAll(); }
-    const ok = await saveRemote();
-    updateSyncUI(ok);
-    toast(ok ? "同步完成" : "同步失败，检查网络");
+        if (!tcbReady) { toast("请先点「连接同步」并配置 CloudBase"); return; }
+        const remote = await loadRemote();
+        const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
+        if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); renderAll(); }
+        const ok = await saveRemote();
+        updateSyncUI(ok);
+        toast(ok ? "同步完成" : "同步失败，检查网络");
       })();
       break;
     case "scan-clear": {
@@ -2584,10 +2555,12 @@ function dedupImages() {
 /* ---------- 启动 ---------- */
 async function boot() {
   state = await loadLocal();
-  if (ghReady()) {
-    const remote = await loadRemote();
-    const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
-    if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); }
+  if (tcbCfg.env && tcbCfg.accessKey) {
+    if (tcbInit() && await tcbLogin()) {
+      const remote = await loadRemote();
+      const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
+      if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); }
+    }
   }
   migrateState();
   if (dedupImages()) saveLocal();
