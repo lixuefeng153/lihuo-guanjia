@@ -499,10 +499,9 @@
     <button class="btn" id="authBtn2" data-action="auth">连接同步</button>
   </div>
 
-<script src="https://static.cloudbase.net/cloudbase-js-sdk/latest/cloudbase.full.js"><\/script>
 <script>
 "use strict";
-/* ---------- 存储层 (IndexedDB 本地 + CloudBase 云端) ---------- */
+/* ---------- 存储层 (IndexedDB 本地 + GitHub 云端) ---------- */
 const DB_NAME = "lh_db", STORE = "data", KEY = "app";
 function openDB() {
   return new Promise((res, rej) => {
@@ -531,40 +530,41 @@ async function saveLocal() {
   });
 }
 
-/* ---------- 云端同步：CloudBase 文档数据库 ---------- */
-const LS_TCB = "lh_tcb_cfg";
-const DEFAULT_TCB = {
-  env: "",
-  accessKey: ""
-};
-let tcbCfg = (() => { try { return Object.assign({}, DEFAULT_TCB, JSON.parse(localStorage.getItem(LS_TCB) || "{}")); } catch (e) { return Object.assign({}, DEFAULT_TCB); } })();
-let tcbApp = null;
-let tcbDb = null;
-let tcbUid = null;
-let tcbReady = false;
+/* ---------- 云端同步：GitHub Contents API ---------- */
+const LS_GH = "lh_gh_cfg";
+const DEFAULT_GH = { owner: "lixuefeng153", repo: "lihuo-guanjia", branch: "main", path: "sync/lh_state.json", token: "" };
+let ghCfg = (() => { try { return Object.assign({}, DEFAULT_GH, JSON.parse(localStorage.getItem(LS_GH) || "{}")); } catch (e) { return Object.assign({}, DEFAULT_GH); } })();
+let ghReady = false;
+let ghSizeError = false;
 
-function tcbInit() {
-  if (!tcbCfg.env || !tcbCfg.accessKey) return false;
-  if (!window.cloudbase) { console.warn("CloudBase SDK 未加载"); return false; }
-  try {
-    tcbApp = window.cloudbase.init({
-      env: tcbCfg.env,
-      accessKey: tcbCfg.accessKey,
-      auth: { detectSessionInUrl: false }
-    });
-    tcbDb = tcbApp.database();
-    return true;
-  } catch (e) { console.warn("CloudBase 初始化失败", e); return false; }
+const GH_CIPHER = "lihuo-guanjia::2026";
+function ghXorBytes(str) {
+  const data = new TextEncoder().encode(str);
+  const key = new TextEncoder().encode(GH_CIPHER);
+  const out = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = data[i] ^ key[i % key.length];
+  let s = ""; for (let i = 0; i < out.length; i++) s += String.fromCharCode(out[i]);
+  return s;
 }
-async function tcbLogin() {
-  if (!tcbApp) return false;
-  try {
-    const { data, error } = await tcbApp.auth.signInAnonymously();
-    if (error) { console.warn("匿名登录失败", error); return false; }
-    tcbUid = data.user.uid;
-    tcbReady = true;
-    return true;
-  } catch (e) { console.warn("登录异常", e); return false; }
+function ghXorBack(bin) {
+  const data = Uint8Array.from(bin, c => c.charCodeAt(0));
+  const key = new TextEncoder().encode(GH_CIPHER);
+  const out = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = data[i] ^ key[i % key.length];
+  return new TextDecoder().decode(out);
+}
+function ghEncode(plain) { return btoa(ghXorBytes(plain)); }
+function ghDecode(b64) { return ghXorBack(atob(b64)); }
+function ghApiUrl() {
+  return `https://api.github.com/repos/${ghCfg.owner}/${ghCfg.repo}/contents/${ghCfg.path}?ref=${encodeURIComponent(ghCfg.branch)}`;
+}
+function ghHeaders(extra) {
+  const h = { "Accept": "application/vnd.github+json", "User-Agent": "lihuo-guanjia", "Authorization": "Bearer " + ghCfg.token };
+  return Object.assign(h, extra || {});
+}
+function ghInit() {
+  ghReady = !!(ghCfg.owner && ghCfg.repo && ghCfg.token);
+  return ghReady;
 }
 
 /* ---------- 预警配置与计算 ---------- */
@@ -619,38 +619,52 @@ function openAlertSettings() {
     + `<div class="field"><div class="hint">提示：产品的「到期日」可在新增 / 编辑产品时填写（食品等易过期品类建议填）；清仓折扣与采购倍数只影响建议值，可按实际调整。</div></div>`;
   document.getElementById("f-low").focus();
 }
-/* ---------- CloudBase 数据库读写 ---------- */
+/* ---------- GitHub 仓库文件读写 ---------- */
 async function loadRemote() {
-  if (!tcbReady || !tcbUid) return null;
+  if (!ghReady) return null;
   try {
-    const res = await tcbDb.collection("lh_state").doc(tcbUid).get();
-    if (res.code || !res.data || !res.data.length) return null;
-    return { data: res.data[0].data };
+    const res = await fetch(ghApiUrl(), { method: "GET", headers: ghHeaders(), mode: "cors" });
+    if (res.status === 404) return null;
+    if (!res.ok) { console.warn("loadRemote HTTP", res.status); return null; }
+    const json = await res.json();
+    const plain = ghDecode((json.content || "").replace(/\s/g, ""));
+    const data = JSON.parse(plain);
+    return { data };
   } catch (e) { console.warn("loadRemote 失败", e); return null; }
 }
 async function saveRemote() {
-  if (!tcbReady || !tcbUid) return false;
+  if (!ghReady) return false;
   try {
-    const res = await tcbDb.collection("lh_state").doc(tcbUid).set({
-      data: state,
-      updated_at: new Date().toISOString()
-    });
-    if (typeof res.code === "string") { console.warn("saveRemote 错误", res); return false; }
+    const content = ghEncode(JSON.stringify(state));
+    if (content.length > 900000) { ghSizeError = true; console.warn("saveRemote：数据过大，超过 GitHub 单文件限制"); return false; }
+    ghSizeError = false;
+    let sha = "";
+    const getRes = await fetch(ghApiUrl(), { method: "GET", headers: ghHeaders(), mode: "cors" });
+    if (getRes.ok) { const j = await getRes.json(); sha = j.sha || ""; }
+    const body = { message: "sync: 理货管家数据更新", content: content };
+    if (sha) body.sha = sha;
+    let putRes = await fetch(ghApiUrl(), { method: "PUT", headers: ghHeaders({ "Content-Type": "application/json" }), mode: "cors", body: JSON.stringify(body) });
+    if (putRes.status === 409) {
+      const j2 = await (await fetch(ghApiUrl(), { method: "GET", headers: ghHeaders(), mode: "cors" })).json();
+      body.sha = j2.sha || "";
+      putRes = await fetch(ghApiUrl(), { method: "PUT", headers: ghHeaders({ "Content-Type": "application/json" }), mode: "cors", body: JSON.stringify(body) });
+    }
+    if (!putRes.ok) { console.warn("saveRemote HTTP", putRes.status); return false; }
     return true;
   } catch (e) { console.warn("saveRemote 失败", e); return false; }
 }
 async function saveData() {
   await saveLocal();
-  if (tcbReady) { const ok = await saveRemote(); updateSyncUI(ok); }
+  if (ghReady) { const ok = await saveRemote(); updateSyncUI(ok); }
 }
 async function updateSyncUI(ok) {
   const el = document.getElementById("syncStatus");
   const btn = document.getElementById("authBtn");
   const btn2 = document.getElementById("authBtn2");
   if (!el || !btn) return;
-  if (!tcbReady) { el.textContent = "未连接同步（点「连接同步」）"; el.className = "sync-status warn"; btn.textContent = "连接同步"; }
-  else if (ok === false) { el.textContent = "同步失败，检查网络"; el.className = "sync-status warn"; btn.textContent = "连接同步"; }
-  else { el.textContent = "已同步 · CloudBase"; el.className = "sync-status ok"; btn.textContent = "断开"; }
+  if (!ghReady) { el.textContent = "未连接同步（点「连接同步」）"; el.className = "sync-status warn"; btn.textContent = "连接同步"; }
+  else if (ok === false) { el.textContent = "同步失败，检查网络/令牌"; el.className = "sync-status warn"; btn.textContent = "连接同步"; }
+  else { el.textContent = "已同步 · GitHub"; el.className = "sync-status ok"; btn.textContent = "断开"; }
   if (btn2) btn2.textContent = btn.textContent;
 }
 
@@ -1233,33 +1247,38 @@ function openProductForm(packageId, id) {
   });
 }
 
-function openTcbConnect() {
-  curEdit = { type: "tcb" };
-  openModal("连接 CloudBase 同步");
+function openSyncConnect() {
+  curEdit = { type: "gh" };
+  openModal("连接 GitHub 同步");
   modalBody.innerHTML =
-    field("环境 ID", "CloudBase 环境标识，如 env-xxx", `<input type="text" id="f-env" value="${esc(tcbCfg.env || "")}" placeholder="env-xxxxxxxx" />`, "f-env")
-    + field("可发布密钥", "从 CloudBase 控制台 -> 环境配置 -> API 密钥 获取（Access Key / 可发布密钥，非 SecretKey）", `<input type="password" id="f-key" value="" placeholder="可发布密钥" />`, "f-key")
-    + `<div class="field"><div class="hint">使用 CloudBase 文档数据库存储同步数据，支持匿名登录无需注册账号。首次使用需在控制台开启「匿名登录」并创建 lh_state 集合。</div></div>`;
-  document.getElementById("f-env").focus();
+    field("GitHub 用户名", "你的 GitHub 账号名（默认已填好）", `<input type="text" id="f-owner" value="${esc(ghCfg.owner || "")}" placeholder="lixuefeng153" />`, "f-owner")
+    + field("仓库名", "存放同步数据的仓库（默认已填好）", `<input type="text" id="f-repo" value="${esc(ghCfg.repo || "")}" placeholder="lihuo-guanjia" />`, "f-repo")
+    + field("个人访问令牌", "GitHub → Settings → Developer settings → PAT（需 repo 权限），以 ghp_ 开头", `<input type="password" id="f-token" value="" placeholder="ghp_xxxxxxxx" />`, "f-token")
+    + `<div class="field"><div class="hint">用 GitHub 仓库文件保存同步数据（公开仓库中数据经简单加密，非明文）。首次连接会在仓库新建 sync/lh_state.json。令牌仅存于本机浏览器，不上传任何服务器。</div></div>`;
+  document.getElementById("f-owner").focus();
 }
 
 async function saveForm() {
   if (!curEdit) return;
-  if (curEdit.type === "tcb") {
-    const env = document.getElementById("f-env").value.trim();
-    const accessKey = document.getElementById("f-key").value.trim();
-    if (!env || !accessKey) { toast("请填写环境 ID 和可发布密钥"); return; }
-    tcbCfg = Object.assign({}, tcbCfg, { env, accessKey });
-    localStorage.setItem(LS_TCB, JSON.stringify(tcbCfg));
-    if (!tcbInit()) { toast("CloudBase 初始化失败，请检查环境 ID 和密钥"); return; }
-    const loginOk = await tcbLogin();
-    if (!loginOk) { toast("匿名登录失败，请在控制台开启「匿名登录」"); return; }
+  if (curEdit.type === "gh") {
+    const owner = document.getElementById("f-owner").value.trim();
+    const repo = document.getElementById("f-repo").value.trim();
+    const token = document.getElementById("f-token").value.trim();
+    if (!owner || !repo || !token) { toast("请填写用户名、仓库名和令牌"); return; }
+    ghCfg = Object.assign({}, DEFAULT_GH, { owner, repo, token });
+    localStorage.setItem(LS_GH, JSON.stringify(ghCfg));
+    if (!ghInit()) { toast("GitHub 初始化失败，请检查填写"); return; }
+    const probe = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { method: "GET", headers: ghHeaders(), mode: "cors" });
+    if (probe.status === 401) { toast("令牌无效或已过期"); return; }
+    if (probe.status === 403) { toast("令牌权限不足，需 repo 权限"); return; }
+    if (probe.status === 404) { toast("仓库不存在或无访问权限"); return; }
     const remote = await loadRemote();
     const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
     if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); renderAll(); }
     const ok = await saveRemote();
-    closeModal(); updateSyncUI(ok);
-    toast("已连接 CloudBase 同步" + (ok ? "，已保存本地数据到云端" : "，保存失败，检查网络"));
+    let msg = "已连接 GitHub 同步" + (ok ? "，数据已保存到仓库" : "，保存失败");
+    if (!ok && ghSizeError) msg = "保存失败：数据超过 GitHub 单文件 1MB 限制（多为商品图片），建议减少图片或改回 CloudBase";
+    closeModal(); updateSyncUI(ok); toast(msg);
     return;
   }
   if (curEdit.type === "store") {
@@ -1564,21 +1583,20 @@ document.addEventListener("click", (e) => {
     case "alert-settings": openAlertSettings(); break;
     case "auth":
       (async () => {
-        if (tcbReady) {
-          tcbApp = null; tcbDb = null; tcbUid = null; tcbReady = false;
-          updateSyncUI(); toast("已断开同步");
-        } else openTcbConnect();
+        if (ghReady) {
+          ghReady = false; ghCfg = Object.assign({}, DEFAULT_GH, { owner: ghCfg.owner, repo: ghCfg.repo }); localStorage.setItem(LS_GH, JSON.stringify(ghCfg)); updateSyncUI(); toast("已断开同步");
+        } else openSyncConnect();
       })();
       break;
     case "sync-now":
       (async () => {
-        if (!tcbReady) { toast("请先点「连接同步」并配置 CloudBase"); return; }
+        if (!ghReady) { toast("请先点「连接同步」并配置 GitHub 同步"); return; }
         const remote = await loadRemote();
         const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
         if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); renderAll(); }
         const ok = await saveRemote();
         updateSyncUI(ok);
-        toast(ok ? "同步完成" : "同步失败，检查网络");
+        toast(ok ? "同步完成" : "同步失败，检查网络/令牌");
       })();
       break;
     case "scan-clear": {
@@ -2555,8 +2573,8 @@ function dedupImages() {
 /* ---------- 启动 ---------- */
 async function boot() {
   state = await loadLocal();
-  if (tcbCfg.env && tcbCfg.accessKey) {
-    if (tcbInit() && await tcbLogin()) {
+  if (ghCfg.owner && ghCfg.token) {
+    if (ghInit()) {
       const remote = await loadRemote();
       const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
       if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); }
