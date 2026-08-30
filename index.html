@@ -1375,27 +1375,26 @@ function buildRows() {
 }
 
 function exportXlsx() {
-  if (typeof XLSX === "undefined" || !XLSX.utils) { toast("表格库未加载，改用 CSV 导出"); return exportCsv(); }
   try {
-  const rows = buildRows();
-  const s = computeSummary();
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const ws2 = XLSX.utils.json_to_sheet([
-    { 指标: "总进货成本", 数值: s.cost },
-    { 指标: "总物流费用", 数值: s.fee },
-    { 指标: "预计零售总额", 数值: s.retail },
-    { 指标: "总毛利", 数值: s.profit },
-    { 指标: "整体毛利率", 数值: pct(s.margin) },
-    { 指标: "供应商数", 数值: s.storeCount },
-    { 指标: "包裹数", 数值: s.pkgCount },
-    { 指标: "产品种类数", 数值: s.productCount },
-    { 指标: "总件数", 数值: s.qty }
-  ]);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "理货明细");
-  XLSX.utils.book_append_sheet(wb, ws2, "汇总");
-  saveXlsx(wb, `理货数据_${dateStr()}.xlsx`);
-  toast("已导出 Excel");
+    const rows = buildRows();
+    const s = computeSummary();
+    const summaryRows = [
+      { 指标: "总进货成本", 数值: s.cost },
+      { 指标: "总物流费用", 数值: s.fee },
+      { 指标: "预计零售总额", 数值: s.retail },
+      { 指标: "总毛利", 数值: s.profit },
+      { 指标: "整体毛利率", 数值: pct(s.margin) },
+      { 指标: "供应商数", 数值: s.storeCount },
+      { 指标: "包裹数", 数值: s.pkgCount },
+      { 指标: "产品种类数", 数值: s.productCount },
+      { 指标: "总件数", 数值: s.qty }
+    ];
+    // 使用纯原生生成器，零外部依赖
+    NativeXLSX([
+      { name: "理货明细", headers: EXPORT_COLS, rows: rows },
+      { name: "汇总", headers: ["指标", "数值"], rows: summaryRows }
+    ], `理货数据_${dateStr()}.xlsx`);
+    toast("已导出 Excel");
   } catch (e) {
     console.error("exportXlsx 失败", e);
     toast("Excel 导出失败：" + ((e && e.message) || e) + "，已自动改用 CSV");
@@ -1429,16 +1428,237 @@ function downloadBlob(blob, name) {
   setTimeout(function () { try { document.body.removeChild(a); } catch (e) {} URL.revokeObjectURL(url); }, 1000);
 }
 
-/* 导出 .xlsx：优先用 XLSX.writeFile（自带下载），失败时退化为 write+blob 下载，
-   与 CSV/JSON 走同一套 downloadBlob 路径，兼容性更好（移动端/沙箱 webview 也能触发下载） */
-function saveXlsx(wb, name) {
-  // 注意：不要使用 XLSX.writeFile —— 它在部分环境（移动端浏览器 / 微信 webview / CSP 限制）
-  // 会静默无动作且不抛异常，表现为"点了导出却毫无反应"，try/catch 兜底也捕捉不到。
-  // 统一改为 XLSX.write 生成二进制 + downloadBlob 下载，与 CSV / JSON 走同一套验证过的路径。
-  const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
-  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  downloadBlob(blob, name);
-}
+/* ---------- 纯原生 XLSX 生成器（零外部依赖） ----------
+   xlsx 本质 = ZIP 包含 XML 文件。本实现仅依赖浏览器原生 Blob/Uint8Array/TextEncoder，
+   不依赖任何 CDN 或本地库文件，彻底消除「库加载失败导致导出降级 CSV」的问题。
+   用法：nativeXlsx([{name:'Sheet1', headers:['列A','列B'], rows:[[值1,值2]]}], '文件名.xlsx') */
+var NativeXLSX = (function () {
+  /* ---- 工具函数 ---- */
+  function escXml(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function rpad(s, n, c) { s = String(s); while (s.length < n) s += (c || " "); return s; }
+  var CRC_TABLE = (function () {
+    var t = new Int32Array(256), i, j, c;
+    for (i = 0; i < 256; i++) { c = i; for (j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[i] = c; }
+    return t;
+  })();
+  function crc32(buf) {
+    var crc = -1, off = 0, len = buf.length;
+    while (len--) crc = CRC_TABLE[(crc ^ buf[off++]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ (-1)) >>> 0;
+  }
+  function toUtf8(s) { return new TextEncoder().encode(String(s)); }
+  /* DOS 时间/日期（ZIP 头用），只算一次，保证各头一致 */
+  var DOS_TIME = (function () {
+    var d = new Date();
+    return {
+      time: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1),
+      date: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()
+    };
+  })();
+  /* 列名：0->A, 25->Z, 26->AA ... */
+  function colName(n) {
+    var s = "";
+    n = n + 1;
+    while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+    return s;
+  }
+
+  /* ---- ZIP 局部文件头 + 数据（30 字节定长头，字段位置严格按规范） ---- */
+  function localFile(path, data) {
+    var pathBytes = toUtf8(path);
+    var hbuf = new Uint8Array(30 + pathBytes.length);
+    var v = new DataView(hbuf.buffer);
+    v.setUint32(0, 0x04034b50, true);      // signature
+    v.setUint16(4, 20, true);              // version needed
+    v.setUint16(6, 0, true);               // flags
+    v.setUint16(8, 0, true);               // compression: stored
+    v.setUint16(10, DOS_TIME.time, true);  // mod time
+    v.setUint16(12, DOS_TIME.date, true);  // mod date
+    v.setUint32(14, crc32(data), true);    // crc-32
+    v.setUint32(18, data.length, true);    // compressed size
+    v.setUint32(22, data.length, true);    // uncompressed size
+    v.setUint16(26, pathBytes.length, true); // filename length
+    v.setUint16(28, 0, true);              // extra field length
+    hbuf.set(pathBytes, 30);
+    return [hbuf, data];
+  }
+
+  /* ---- ZIP 中央目录（46 字节定长头） ---- */
+  function centralFile(path, data, offset) {
+    var pathBytes = toUtf8(path);
+    var hbuf = new Uint8Array(46 + pathBytes.length);
+    var v = new DataView(hbuf.buffer);
+    v.setUint32(0, 0x02014b50, true);      // signature
+    v.setUint16(4, 20, true);              // version made by
+    v.setUint16(6, 20, true);              // version needed
+    v.setUint16(8, 0, true);               // flags
+    v.setUint16(10, 0, true);              // compression: stored
+    v.setUint16(12, DOS_TIME.time, true);  // mod time
+    v.setUint16(14, DOS_TIME.date, true);  // mod date
+    v.setUint32(16, crc32(data), true);    // crc-32
+    v.setUint32(20, data.length, true);    // compressed size
+    v.setUint32(24, data.length, true);    // uncompressed size
+    v.setUint16(28, pathBytes.length, true); // filename length
+    v.setUint16(30, 0, true);              // extra field length
+    v.setUint16(32, 0, true);              // file comment length
+    v.setUint16(34, 0, true);              // disk number start
+    v.setUint16(36, 0, true);              // internal attrs
+    v.setUint32(38, 0, true);              // external attrs
+    v.setUint32(42, offset, true);         // 局部头相对偏移（关键：在 42 字节处）
+    hbuf.set(pathBytes, 46);
+    return hbuf;
+  }
+
+  /* ---- ZIP 结束标记 ---- */
+  function endOfCentral(numEntries, centralSize, centralOffset) {
+    var buf = new Uint8Array(22);
+    var v = new DataView(buf.buffer);
+    v.setUint32(0, 0x06054b50, true);  // signature
+    v.setUint16(4, 0, true);              // disk number
+    v.setUint16(6, 0, true);              // disk with central dir
+    v.setUint16(8, numEntries, true);      // entries on this disk
+    v.setUint16(10, numEntries, true);     // total entries
+    v.setUint32(12, centralSize, true);    // central dir size
+    v.setUint32(16, centralOffset, true);  // central dir offset
+    v.setUint16(20, 0, true);             // comment length
+    return buf;
+  }
+
+  /* ---- 打包成 ZIP Blob ---- */
+  function createZip(files) {
+    var parts = [], offset = 0, localData = [];
+    for (var i = 0; i < files.length; i++) {
+      var data = toUtf8(files[i].content);
+      var lf = localFile(files[i].path, data);
+      parts.push(lf[0]); parts.push(lf[1]);
+      localData.push({ path: files[i].path, data: data, offset: offset });
+      offset += lf[0].length + lf[1].length;
+    }
+    var centralStart = offset;
+    var centralParts = [];
+    for (var j = 0; j < localData.length; j++) {
+      var cf = centralFile(localData[j].path, localData[j].data, localData[j].offset);
+      centralParts.push(cf);
+      offset += cf.length;
+    }
+    var eocd = endOfCentral(files.length, offset - centralStart, centralStart);
+    parts.push.apply(parts, centralParts);
+    parts.push(eocd);
+    return new Blob(parts, { type: 'application/zip' });
+  }
+
+  /* ---- XML 生成器 ---- */
+  function contentTypesXml(sheetCount) {
+    var lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+      '<Default Extension="rels" Content-Type="application/vnd.openxmlformats-package.relationships+xml"/>',
+      '<Default Extension="xml" Content-Type="application/xml"/>'];
+    for (var i = 1; i <= sheetCount; i++)
+      lines.push('<Override PartName="/xl/worksheets/sheet' + i + '.xml" Content-Type="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>');
+    lines.push('<Override PartName="/xl/workbook.xml" Content-Type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>');
+    lines.push('</Types>');
+    return lines.join('\r\n');
+  }
+  function relsXml() {
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+  }
+  function workbookRelsXml(sheetCount) {
+    var lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'];
+    for (var i = 1; i <= sheetCount; i++)
+      lines.push('<Relationship Id="rId' + i + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + i + '.xml"/>');
+    lines.push('</Relationships>');
+    return lines.join('\r\n');
+  }
+  function workbookXml(sheets) {
+    var lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+      '<sheets>'];
+    for (var i = 0; i < sheets.length; i++)
+      lines.push('<sheet name="' + escXml(sheets[i].name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>');
+    lines.push('</sheets></workbook>');
+    return lines.join('\r\n');
+  }
+  function sheetXml(sheet) {
+    var h = sheet.headers || [];
+    var rows = sheet.rows || [];
+    var lastCol = h.length > 0 ? colName(h.length - 1) : "A";
+    var lines = [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+      '<dimension ref="A1:' + lastCol + (rows.length + 1) + '"/>',
+      '<sheetViews><sheetView tabSelected="1" workbookViewId="0"/></sheetViews>',
+      '<sheetFormatPr defaultRowHeight="15"/>',
+      '<sheetData>'
+    ];
+    // header row
+    if (h.length > 0) {
+      var hr = '<row r="1">';
+      for (var ci = 0; ci < h.length; ci++)
+        hr += '<c r="' + colName(ci) + '1" t="inlineStr"><is><t xml:space="preserve">' + escXml(h[ci]) + '</t></is></c>';
+      hr += '</row>';
+      lines.push(hr);
+    }
+    // data rows
+    for (var ri = 0; ri < rows.length; ri++) {
+      var row = '<row r="' + (ri + 2) + '">';
+      var rowData = rows[ri];
+      for (var di = 0; di < h.length; di++) {
+        var val = (rowData != null && rowData[h[di]] !== undefined) ? rowData[h[di]] : '';
+        var cellRef = colName(di) + (ri + 2);
+        // 数字且为有限值 -> 数值单元格；其余（含数字形式的编号）一律按文本存，避免丢前导零
+        if (typeof val === "number" && isFinite(val)) {
+          row += '<c r="' + cellRef + '"><v>' + val + '</v></c>';
+        } else {
+          row += '<c r="' + cellRef + '" t="inlineStr"><is><t xml:space="preserve">' + escXml(val) + '</t></is></c>';
+        }
+      }
+      row += '</row>';
+      lines.push(row);
+    }
+    lines.push('</sheetData></worksheet>');
+    return lines.join('\r\n');
+  }
+
+  /* ---- Sheet 名兜底清洗：Excel 限制 31 字符且禁用 []:*?/\ ---- */
+  function safeSheetName(n, idx, used) {
+    var s = String(n == null ? "" : n).replace(/[\\\/\?\*\[\]:]/g, "").trim();
+    if (!s) s = "Sheet" + (idx + 1);
+    if (s.length > 31) s = s.slice(0, 31);
+    if (used[s] !== undefined) {
+      var base = s.slice(0, 28), k = 2;
+      while (used[base + "_" + k] !== undefined) k++;
+      s = base + "_" + k;
+    }
+    used[s] = 1;
+    return s;
+  }
+
+  /* ---- 公开 API ---- */
+  return function write(sheets, filename) {
+    // 先规范化每个 sheet，保证 name/headers/rows 齐全且表名合法
+    var used = {}, norm = [];
+    for (var i = 0; i < sheets.length; i++) {
+      var sh = sheets[i] || {};
+      norm.push({
+        name: safeSheetName(sh.name, i, used),
+        headers: sh.headers || [],
+        rows: sh.rows || []
+      });
+    }
+    var files = [
+      { path: '[Content_Types].xml', content: contentTypesXml(norm.length) },
+      { path: '_rels/.rels', content: relsXml() },
+      { path: 'xl/workbook.xml', content: workbookXml(norm) },
+      { path: 'xl/_rels/workbook.xml.rels', content: workbookRelsXml(norm.length) }
+    ];
+    for (var i = 0; i < norm.length; i++)
+      files.push({ path: 'xl/worksheets/sheet' + (i + 1) + '.xml', content: sheetXml(norm[i]) });
+    var blob = createZip(files);
+    downloadBlob(blob, filename);
+  };
+})();
+
+/* 说明：所有 Excel 导出统一走 NativeXLSX（零依赖，见上方实现）。
+   XLSX 库仅保留给「导入 Excel」使用（见下方 importExcel）。 */
 
 /* 导出 JSON 备份：完整无损，结构与 IndexedDB 存储一致，导入可 100% 还原 */
 function exportJson() {
@@ -2053,56 +2273,56 @@ function procureRows() {
   }));
 }
 function procExportXlsx() {
-  const items = procureItems();
-  if (items.length === 0) { toast("没有需要补货的产品"); return; }
-  const rows = procureRows();
-  const catMap = new Map();
-  items.forEach(x => {
-    const c = x.p.category || "未分类";
-    if (!catMap.has(c)) catMap.set(c, { n: 0, qty: 0, amount: 0 });
-    const g = catMap.get(c); g.n++; g.qty += x.suggest; g.amount += x.amount;
-  });
-  const catRows = [...catMap.entries()].map(([c, g]) => ({ 品类: c, 需补产品数: g.n, 建议补货量: g.qty, 预计金额: Math.round(g.amount * 100) / 100 }));
-  if (typeof XLSX === "undefined" || !XLSX.utils) {
-    const lines = [["供应商", "品类", "产品名称", "当前库存", "建议补货量", "进货单价", "预计金额"].join(",")];
-    rows.forEach(r => lines.push([r.供应商, r.品类, r.产品名称, r.当前库存, r.建议补货量, r.进货单价, r.预计金额].map(v => { v = String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? `"${v}"` : v; }).join(",")));
-    downloadBlob(new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" }), `采购清单_${dateStr()}.csv`);
-    toast("已导出 CSV（表格库未加载）");
-    return;
+  try {
+    const items = procureItems();
+    if (items.length === 0) { toast("没有需要补货的产品"); return; }
+    const rows = procureRows();
+    const catMap = new Map();
+    items.forEach(x => {
+      const c = x.p.category || "未分类";
+      if (!catMap.has(c)) catMap.set(c, { n: 0, qty: 0, amount: 0 });
+      const g = catMap.get(c); g.n++; g.qty += x.suggest; g.amount += x.amount;
+    });
+    const catRows = [...catMap.entries()].map(([c, g]) => ({ 品类: c, 需补产品数: g.n, 建议补货量: g.qty, 预计金额: Math.round(g.amount * 100) / 100 }));
+    const storeGroups = new Map();
+    rows.forEach(r => {
+      if (!storeGroups.has(r.供应商)) storeGroups.set(r.供应商, []);
+      storeGroups.get(r.供应商).push(r);
+    });
+    const totalAmount = items.reduce((s, x) => s + x.amount, 0);
+    const totalQty = items.reduce((s, x) => s + x.suggest, 0);
+    const overview = [
+      { 指标: "生成日期", 数值: dateStr() },
+      { 指标: "需采购供应商数", 数值: storeGroups.size },
+      { 指标: "需补货产品数", 数值: rows.length },
+      { 指标: "建议补货总量", 数值: totalQty },
+      { 指标: "预计采购总额", 数值: Math.round(totalAmount * 100) / 100 }
+    ];
+    const supSummary = [...storeGroups.entries()].map(([sn, rr]) => ({
+      供应商: sn, 需补种数: rr.length,
+      建议补货量: rr.reduce((s, r) => s + r.建议补货量, 0),
+      预计金额: Math.round(rr.reduce((s, r) => s + r.预计金额, 0) * 100) / 100
+    }));
+    // 用纯原生生成器构建所有 sheet
+    var sheets = [
+      { name: "总览", headers: ["指标", "数值"], rows: overview },
+      { name: "按供应商汇总", headers: ["供应商", "需补种数", "建议补货量", "预计金额"], rows: supSummary },
+      { name: "品类汇总", headers: ["品类", "需补产品数", "建议补货量", "预计金额"], rows: catRows }
+    ];
+    var used = new Set(["总览", "按供应商汇总", "品类汇总"]);
+    var procHeaders = ["供应商", "品类", "产品名称", "当前库存", "建议补货量", "进货单价", "预计金额"];
+    storeGroups.forEach((rr, sn) => {
+      let n = sanitizeSheet(sn), k = 2;
+      while (used.has(n)) { n = sn + " " + k; k++; }
+      used.add(n);
+      sheets.push({ name: n, headers: procHeaders, rows: rr });
+    });
+    NativeXLSX(sheets, `采购清单_${dateStr()}.xlsx`);
+    toast("已导出 Excel（总览 + 每供应商一个 sheet）");
+  } catch (e) {
+    console.error("procExportXlsx 失败", e);
+    toast("Excel 导出失败：" + ((e && e.message) || e));
   }
-  const storeGroups = new Map();
-  rows.forEach(r => {
-    if (!storeGroups.has(r.供应商)) storeGroups.set(r.供应商, []);
-    storeGroups.get(r.供应商).push(r);
-  });
-  const wb = XLSX.utils.book_new();
-  const totalAmount = items.reduce((s, x) => s + x.amount, 0);
-  const totalQty = items.reduce((s, x) => s + x.suggest, 0);
-  const overview = [
-    { 指标: "生成日期", 数值: dateStr() },
-    { 指标: "需采购供应商数", 数值: storeGroups.size },
-    { 指标: "需补货产品数", 数值: rows.length },
-    { 指标: "建议补货总量", 数值: totalQty },
-    { 指标: "预计采购总额", 数值: Math.round(totalAmount * 100) / 100 }
-  ];
-  const supSummary = [...storeGroups.entries()].map(([sn, rr]) => ({
-    供应商: sn, 需补种数: rr.length,
-    建议补货量: rr.reduce((s, r) => s + r.建议补货量, 0),
-    预计金额: Math.round(rr.reduce((s, r) => s + r.预计金额, 0) * 100) / 100
-  }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(overview), "总览");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(supSummary), "按供应商汇总");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), "品类汇总");
-  const used = new Set(["总览", "按供应商汇总", "品类汇总"]);
-  storeGroups.forEach((rr, sn) => {
-    let sheetName = sanitizeSheet(sn);
-    let n = sheetName, k = 2;
-    while (used.has(n)) { n = sheetName + " " + k; k++; }
-    used.add(n);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rr), n);
-  });
-  saveXlsx(wb, `采购清单_${dateStr()}.xlsx`);
-  toast("已导出 Excel（总览 + 每供应商一个 sheet）");
 }
 async function procCopy() {
   const items = procureItems();
@@ -2318,82 +2538,56 @@ function sanitizeSheet(name) {
   return s.slice(0, 31) || "供应商";
 }
 function quarterExportXlsx() {
-  const qKey = quarterCurrent();
-  const rows = analyzeQuarter(qKey).sort((a, b) => (b.profit - a.profit) || (b.restockCost - a.restockCost));
-  if (rows.length === 0) { toast("该季度没有供应商数据"); return; }
-  const rg = qRange(qKey);
-  const totalRestockCost = rows.reduce((s, r) => s + r.restockCost, 0);
-  const totalInvCost = rows.reduce((s, r) => s + r.invCost, 0);
-  const totalRetail = rows.reduce((s, r) => s + r.retail, 0);
-  const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
-  if (typeof XLSX === "undefined" || !XLSX.utils) {
-    const csv = (arr) => arr.map(v => { v = String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? `"${v}"` : v; }).join(",");
-    const lines = [];
-    lines.push("季度复盘（" + qLabel(qKey) + "）");
-    lines.push(csv(["指标", "数值"]));
-    lines.push(csv(["复盘季度", qLabel(qKey)]));
-    lines.push(csv(["供应商数", rows.length]));
-    lines.push(csv(["本期补货成本", totalRestockCost.toFixed(2)]));
-    lines.push(csv(["当前库存货值", totalInvCost.toFixed(2)]));
-    lines.push(csv(["预计零售总额", totalRetail.toFixed(2)]));
-    lines.push(csv(["预计毛利", totalProfit.toFixed(2)]));
-    lines.push(csv(["整体毛利率", pct(totalRetail > 0 ? totalProfit / totalRetail : 0)]));
-    lines.push("");
-    lines.push("供应商排名（按预计毛利）");
-    lines.push(csv(["排名", "供应商", "SKU数", "补货次数", "补货件数", "补货成本", "库存货值", "预计毛利", "毛利率"]));
-    rows.forEach((r, i) => lines.push(csv([i + 1, r.store.name, r.skus, r.restockCount, r.restockQty, r.restockCost.toFixed(2), r.invCost.toFixed(2), r.profit.toFixed(2), pct(r.margin)])));
+  try {
+    const qKey = quarterCurrent();
+    const rows = analyzeQuarter(qKey).sort((a, b) => (b.profit - a.profit) || (b.restockCost - a.restockCost));
+    if (rows.length === 0) { toast("该季度没有供应商数据"); return; }
+    const rg = qRange(qKey);
+    const totalRestockCost = rows.reduce((s, r) => s + r.restockCost, 0);
+    const totalInvCost = rows.reduce((s, r) => s + r.invCost, 0);
+    const totalRetail = rows.reduce((s, r) => s + r.retail, 0);
+    const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
+    var overviewRows = [
+      { 指标: "复盘季度", 数值: qLabel(qKey) },
+      { 指标: "供应商数", 数值: rows.length },
+      { 指标: "本期补货成本", 数值: Math.round(totalRestockCost * 100) / 100 },
+      { 指标: "当前库存货值", 数值: Math.round(totalInvCost * 100) / 100 },
+      { 指标: "预计零售总额", 数值: Math.round(totalRetail * 100) / 100 },
+      { 指标: "预计毛利", 数值: Math.round(totalProfit * 100) / 100 },
+      { 指标: "整体毛利率", 数值: pct(totalRetail > 0 ? totalProfit / totalRetail : 0) }
+    ];
+    var rankRows = rows.map((r, i) => ({ 排名: i + 1, 供应商: r.store.name, "SKU数": r.skus, "补货次数": r.restockCount, "补货件数": r.restockQty, "补货成本": Math.round(r.restockCost * 100) / 100, "库存货值": Math.round(r.invCost * 100) / 100, "预计毛利": Math.round(r.profit * 100) / 100, "毛利率": pct(r.margin), "新进SKU": r.newSkus, "动销SKU": r.activeSkus, "积压SKU": r.idleSkus }));
+    var sheets = [
+      { name: "总览", headers: ["指标", "数值"], rows: overviewRows },
+      { name: "供应商排名", headers: ["排名","供应商","SKU数","补货次数","补货件数","补货成本","库存货值","预计毛利","毛利率","新进SKU","动销SKU","积压SKU"], rows: rankRows }
+    ];
+    var used = new Set(["总览", "供应商排名"]);
+    var detailHeaders = ["产品名称","类别","型号","数量","进货单价","零售价","单件成本含运费","单件毛利","毛利率","小计零售","小计毛利","本季补货次数","本季补货件数"];
     rows.forEach(r => {
-      lines.push("");
-      lines.push("【" + r.store.name + "】产品明细");
-      lines.push(csv(["产品名称", "类别", "数量", "进货单价", "零售价", "单件毛利", "毛利率", "小计零售", "本季补货次数", "本季补货件数"]));
-      const prods = state.products.filter(p => state.packages.some(k => k.id === p.packageId && k.storeId === r.store.id));
-      prods.forEach(p => {
-        const q = Number(p.quantity) || 0;
-        const profit = productProfit(p);
-        const qr = restockLog(p).filter(e => e.at >= rg.start && e.at < rg.end);
-        lines.push(csv([p.name || "未命名产品", p.category || "", q, (Number(p.purchasePrice) || 0).toFixed(2), (Number(p.retailPrice) || 0).toFixed(2), profit.toFixed(2), pct(productMargin(p)), ((Number(p.retailPrice) || 0) * q).toFixed(2), qr.length, qr.reduce((s, e) => s + (Number(e.qty) || 0), 0)]));
+      var prods = state.products.filter(p => state.packages.some(k => k.id === p.packageId && k.storeId === r.store.id));
+      var detail = prods.map(p => {
+        var q = Number(p.quantity) || 0;
+        var cost = productCost(p), profit = productProfit(p), margin = productMargin(p);
+        var qr = restockLog(p).filter(e => e.at >= rg.start && e.at < rg.end);
+        return {
+          产品名称: p.name || "未命名产品", 类别: p.category || "", 型号: p.model || "",
+          数量: q, 进货单价: Number(p.purchasePrice) || 0, 零售价: Number(p.retailPrice) || 0,
+          单件成本含运费: Math.round(cost * 100) / 100, 单件毛利: Math.round(profit * 100) / 100, 毛利率: pct(margin),
+          小计零售: Math.round((Number(p.retailPrice) || 0) * q * 100) / 100, 小计毛利: Math.round(profit * q * 100) / 100,
+          本季补货次数: qr.length, 本季补货件数: qr.reduce((s, e) => s + (Number(e.qty) || 0), 0)
+        };
       });
+      let n = sanitizeSheet(r.store.name), k = 2;
+      while (used.has(n)) { n = r.store.name + " " + k; k++; }
+      used.add(n);
+      sheets.push({ name: n, headers: detailHeaders, rows: detail });
     });
-    downloadBlob(new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" }), `季度复盘_${qKey}.csv`);
-    toast("已导出 CSV（表格库未加载）");
-    return;
+    NativeXLSX(sheets, `季度复盘_${qKey}.xlsx`);
+    toast("已导出 Excel（每个供应商一个 sheet）");
+  } catch (e) {
+    console.error("quarterExportXlsx 失败", e);
+    toast("Excel 导出失败：" + ((e && e.message) || e));
   }
-  const wb = XLSX.utils.book_new();
-  const overviewRows = [
-    { 指标: "复盘季度", 数值: qLabel(qKey) },
-    { 指标: "供应商数", 数值: rows.length },
-    { 指标: "本期补货成本", 数值: Math.round(totalRestockCost * 100) / 100 },
-    { 指标: "当前库存货值", 数值: Math.round(totalInvCost * 100) / 100 },
-    { 指标: "预计零售总额", 数值: Math.round(totalRetail * 100) / 100 },
-    { 指标: "预计毛利", 数值: Math.round(totalProfit * 100) / 100 },
-    { 指标: "整体毛利率", 数值: pct(totalRetail > 0 ? totalProfit / totalRetail : 0) }
-  ];
-  const rankRows = rows.map((r, i) => ({ 排名: i + 1, 供应商: r.store.name, "SKU数": r.skus, "补货次数": r.restockCount, "补货件数": r.restockQty, "补货成本": Math.round(r.restockCost * 100) / 100, "库存货值": Math.round(r.invCost * 100) / 100, "预计毛利": Math.round(r.profit * 100) / 100, "毛利率": pct(r.margin), "新进SKU": r.newSkus, "动销SKU": r.activeSkus, "积压SKU": r.idleSkus }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(overviewRows), "总览");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rankRows), "供应商排名");
-  const used = new Set(["总览", "供应商排名"]);
-  rows.forEach(r => {
-    const prods = state.products.filter(p => state.packages.some(k => k.id === p.packageId && k.storeId === r.store.id));
-    const detail = prods.map(p => {
-      const q = Number(p.quantity) || 0;
-      const cost = productCost(p), profit = productProfit(p), margin = productMargin(p);
-      const qr = restockLog(p).filter(e => e.at >= rg.start && e.at < rg.end);
-      return {
-        产品名称: p.name || "未命名产品", 类别: p.category || "", 型号: p.model || "",
-        数量: q, 进货单价: Number(p.purchasePrice) || 0, 零售价: Number(p.retailPrice) || 0,
-        单件成本含运费: Math.round(cost * 100) / 100, 单件毛利: Math.round(profit * 100) / 100, 毛利率: pct(margin),
-        小计零售: Math.round((Number(p.retailPrice) || 0) * q * 100) / 100, 小计毛利: Math.round(profit * q * 100) / 100,
-        本季补货次数: qr.length, 本季补货件数: qr.reduce((s, e) => s + (Number(e.qty) || 0), 0)
-      };
-    });
-    let sheetName = sanitizeSheet(r.store.name);
-    let n = sheetName, k = 2;
-    while (used.has(n)) { n = sheetName + " " + k; k++; }
-    used.add(n);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), n);
-  });
-  saveXlsx(wb, `季度复盘_${qKey}.xlsx`);
-  toast("已导出 Excel（每个供应商一个 sheet）");
 }
 
 /* ---------- 半月报导出（图片 / PDF） ---------- */
@@ -2468,100 +2662,76 @@ async function exportPdf(el, name) {
   } catch (e) { console.error(e); toast("PDF 导出失败"); }
 }
 
-/* 半月报导出 Excel（总览 + TOP + 选品维度 + 每供应商一个 sheet，与季度复盘同规格） */
+/* 半月报导出 Excel（总览 + TOP + 选品维度 + 每供应商一个 sheet，纯原生生成） */
 function reportExportXlsx() {
-  const ym = reportMonthValue();
-  if (!ym) { toast("请先选择月份"); return; }
-  const rows = analyzeMonth(ym);
-  if (rows.length === 0) { toast("该月份没有产品数据"); return; }
-  const p1Total = sum(rows, r => r.p1c), p2Total = sum(rows, r => r.p2c);
-  const restedProducts = rows.filter(r => r.tc > 0).length;
-  const neverRestock = rows.filter(r => !r.everRestock);
-  const totalQty = sum(rows, r => r.tq);
-  const trendyRows = rows.filter(r => TRENDY_CATS.includes(r.p.category));
-  const normalRows = rows.filter(r => !TRENDY_CATS.includes(r.p.category));
-  const top = rows.filter(r => r.tc > 0).sort((a, b) => b.tc - a.tc || b.tq - a.tq).map((r, i) => {
-    const phase = (r.p1c > 0 && r.p2c > 0) ? "两阶段都进" : (r.p1c > 0 ? "主要在1-15号" : "主要在16-31号");
-    return { 排名: i + 1, 产品: r.p.name || "未命名产品", 类别: r.p.category || "", "P1次数": r.p1c, "P2次数": r.p2c, 本月次数: r.tc, 补货件数: r.tq, 补货阶段: phase };
-  });
-  const storeMap = new Map();
-  rows.forEach(r => {
-    const pkg = state.packages.find(x => x.id === r.p.packageId);
-    const store = pkg ? state.stores.find(s => s.id === pkg.storeId) : null;
-    const sn = store ? store.name : "未归属";
-    if (!storeMap.has(sn)) storeMap.set(sn, []);
-    storeMap.get(sn).push(r);
-  });
-  const catAgg = groupBy(rows, r => productCat(r.p), restockAgg).sort((a, b) => (b.p1 + b.p2) - (a.p1 + a.p2));
-  const priceAgg = groupBy(rows, r => priceTier(Number(r.p.retailPrice) || 0), restockAgg).sort((a, b) => PRICE_ORDER.indexOf(a.key) - PRICE_ORDER.indexOf(b.key));
-  const trendyAgg = groupBy(rows, r => TRENDY_CATS.includes(r.p.category) ? "潮流类" : "常规类", restockAgg);
-  if (typeof XLSX === "undefined" || !XLSX.utils) {
-    const csv = (arr) => arr.map(v => { v = String(v).replace(/"/g, '""'); return /[",\n]/.test(v) ? `"${v}"` : v; }).join(",");
-    const lines = [];
-    lines.push("半月报（" + ym + "）");
-    lines.push(csv(["指标", "数值"]));
-    lines.push(csv(["复盘月份", ym]));
-    lines.push(csv(["1-15号补货次数", p1Total]));
-    lines.push(csv(["16-31号补货次数", p2Total]));
-    lines.push(csv(["有补货的产品", restedProducts]));
-    lines.push(csv(["从未补货的产品", neverRestock.length]));
-    lines.push(csv(["补货总件数", totalQty]));
-    lines.push(csv(["潮流类补货(次/件)", sum(trendyRows, r => r.tc) + " / " + sum(trendyRows, r => r.tq)]));
-    lines.push(csv(["常规类补货(次/件)", sum(normalRows, r => r.tc) + " / " + sum(normalRows, r => r.tq)]));
-    lines.push("");
-    lines.push("进货频繁 TOP");
-    lines.push(csv(["排名", "产品", "类别", "P1次数", "P2次数", "本月次数", "补货件数"]));
-    top.forEach(r => lines.push(csv([r.排名, r.产品, r.类别, r.P1次数, r.P2次数, r.本月次数, r.补货件数])));
+  try {
+    const ym = reportMonthValue();
+    if (!ym) { toast("请先选择月份"); return; }
+    const rows = analyzeMonth(ym);
+    if (rows.length === 0) { toast("该月份没有产品数据"); return; }
+    const p1Total = sum(rows, r => r.p1c), p2Total = sum(rows, r => r.p2c);
+    const restedProducts = rows.filter(r => r.tc > 0).length;
+    const neverRestock = rows.filter(r => !r.everRestock);
+    const totalQty = sum(rows, r => r.tq);
+    const trendyRows = rows.filter(r => TRENDY_CATS.includes(r.p.category));
+    const normalRows = rows.filter(r => !TRENDY_CATS.includes(r.p.category));
+    const top = rows.filter(r => r.tc > 0).sort((a, b) => b.tc - a.tc || b.tq - a.tq).map((r, i) => {
+      const phase = (r.p1c > 0 && r.p2c > 0) ? "两阶段都进" : (r.p1c > 0 ? "主要在1-15号" : "主要在16-31号");
+      return { 排名: i + 1, 产品: r.p.name || "未命名产品", 类别: r.p.category || "", "P1次数": r.p1c, "P2次数": r.p2c, 本月次数: r.tc, 补货件数: r.tq, 补货阶段: phase };
+    });
+    const storeMap = new Map();
+    rows.forEach(r => {
+      const pkg = state.packages.find(x => x.id === r.p.packageId);
+      const store = pkg ? state.stores.find(s => s.id === pkg.storeId) : null;
+      const sn = store ? store.name : "未归属";
+      if (!storeMap.has(sn)) storeMap.set(sn, []);
+      storeMap.get(sn).push(r);
+    });
+    const catAgg = groupBy(rows, r => productCat(r.p), restockAgg).sort((a, b) => (b.p1 + b.p2) - (a.p1 + a.p2));
+    const priceAgg = groupBy(rows, r => priceTier(Number(r.p.retailPrice) || 0), restockAgg).sort((a, b) => PRICE_ORDER.indexOf(a.key) - PRICE_ORDER.indexOf(b.key));
+    const trendyAgg = groupBy(rows, r => TRENDY_CATS.includes(r.p.category) ? "潮流类" : "常规类", restockAgg);
+    var overview = [
+      { 指标: "复盘月份", 数值: ym },
+      { 指标: "1-15号补货次数", 数值: p1Total },
+      { 指标: "16-31号补货次数", 数值: p2Total },
+      { 指标: "有补货的产品", 数值: restedProducts },
+      { 指标: "从未补货的产品", 数值: neverRestock.length },
+      { 指标: "本月无补货的产品", 数值: rows.filter(r => r.tc === 0).length },
+      { 指标: "补货总件数", 数值: totalQty },
+      { 指标: "潮流类补货(次/件)", 数值: sum(trendyRows, r => r.tc) + " 次 / " + sum(trendyRows, r => r.tq) + " 件" },
+      { 指标: "常规类补货(次/件)", 数值: sum(normalRows, r => r.tc) + " 次 / " + sum(normalRows, r => r.tq) + " 件" }
+    ];
+    var sheets = [
+      { name: "总览", headers: ["指标", "数值"], rows: overview },
+      { name: "进货频繁TOP", headers: ["排名","产品","类别","P1次数","P2次数","本月次数","补货件数","补货阶段"], rows: top },
+      { name: "种类汇总", headers: ["种类","产品数","P1次数","P2次数","补货件数","补货产品数"], rows: catAgg.map(g => ({ 种类: g.key, 产品数: g.products, "P1次数": g.p1, "P2次数": g.p2, 补货件数: g.q, 补货产品数: g.rested })) },
+      { name: "价格档汇总", headers: ["价格档","产品数","P1次数","P2次数","补货件数","补货产品数"], rows: priceAgg.map(g => ({ 价格档: g.key, 产品数: g.products, "P1次数": g.p1, "P2次数": g.p2, 补货件数: g.q, 补货产品数: g.rested })) },
+      { name: "潮流度", headers: ["潮流度","产品数","补货次数","补货件数","补货产品数"], rows: trendyAgg.map(g => ({ 潮流度: g.key, 产品数: g.products, 补货次数: g.p1 + g.p2, 补货件数: g.q, 补货产品数: g.rested })) }
+    ];
+    var used = new Set(["总览", "进货频繁TOP", "种类汇总", "价格档汇总", "潮流度"]);
+    var detailHeaders = ["产品名称","类别","数量","进货单价","零售价","单件毛利","小计零售","本月补货次数","本月补货件数","到期日"];
     storeMap.forEach((rrs, sn) => {
-      lines.push("");
-      lines.push("【" + sn + "】产品明细");
-      lines.push(csv(["产品名称", "类别", "数量", "进货单价", "零售价", "单件毛利", "小计零售", "本月补货次数", "本月补货件数", "到期日"]));
-      rrs.forEach(r => {
-        const p = r.p, q = Number(p.quantity) || 0;
-        lines.push(csv([p.name || "未命名产品", p.category || "", q, (Number(p.purchasePrice) || 0).toFixed(2), (Number(p.retailPrice) || 0).toFixed(2), productProfit(p).toFixed(2), ((Number(p.retailPrice) || 0) * q).toFixed(2), r.tc, r.tq, p.expiry || ""]));
+      var detail = rrs.map(r => {
+        var p = r.p, q = Number(p.quantity) || 0;
+        return {
+          产品名称: p.name || "未命名产品", 类别: p.category || "", 数量: q,
+          进货单价: Number(p.purchasePrice) || 0, 零售价: Number(p.retailPrice) || 0,
+          单件毛利: Math.round(productProfit(p) * 100) / 100,
+          小计零售: Math.round((Number(p.retailPrice) || 0) * q * 100) / 100,
+          本月补货次数: r.tc, 本月补货件数: r.tq, 到期日: p.expiry || ""
+        };
       });
+      let n = sanitizeSheet(sn), k = 2;
+      while (used.has(n)) { n = sn + " " + k; k++; }
+      used.add(n);
+      sheets.push({ name: n, headers: detailHeaders, rows: detail });
     });
-    downloadBlob(new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" }), `半月报_${ym}.csv`);
-    toast("已导出 CSV（表格库未加载）");
-    return;
+    NativeXLSX(sheets, `半月报_${ym}.xlsx`);
+    toast("已导出 Excel（总览 + TOP + 每供应商一个 sheet）");
+  } catch (e) {
+    console.error("reportExportXlsx 失败", e);
+    toast("Excel 导出失败：" + ((e && e.message) || e));
   }
-  const wb = XLSX.utils.book_new();
-  const overview = [
-    { 指标: "复盘月份", 数值: ym },
-    { 指标: "1-15号补货次数", 数值: p1Total },
-    { 指标: "16-31号补货次数", 数值: p2Total },
-    { 指标: "有补货的产品", 数值: restedProducts },
-    { 指标: "从未补货的产品", 数值: neverRestock.length },
-    { 指标: "本月无补货的产品", 数值: rows.filter(r => r.tc === 0).length },
-    { 指标: "补货总件数", 数值: totalQty },
-    { 指标: "潮流类补货(次/件)", 数值: sum(trendyRows, r => r.tc) + " 次 / " + sum(trendyRows, r => r.tq) + " 件" },
-    { 指标: "常规类补货(次/件)", 数值: sum(normalRows, r => r.tc) + " 次 / " + sum(normalRows, r => r.tq) + " 件" }
-  ];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(overview), "总览");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(top), "进货频繁TOP");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catAgg.map(g => ({ 种类: g.key, 产品数: g.products, "P1次数": g.p1, "P2次数": g.p2, 补货件数: g.q, 补货产品数: g.rested }))), "种类汇总");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(priceAgg.map(g => ({ 价格档: g.key, 产品数: g.products, "P1次数": g.p1, "P2次数": g.p2, 补货件数: g.q, 补货产品数: g.rested }))), "价格档汇总");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(trendyAgg.map(g => ({ 潮流度: g.key, 产品数: g.products, 补货次数: g.p1 + g.p2, 补货件数: g.q, 补货产品数: g.rested }))), "潮流度");
-  const used = new Set(["总览", "进货频繁TOP", "种类汇总", "价格档汇总", "潮流度"]);
-  storeMap.forEach((rrs, sn) => {
-    const detail = rrs.map(r => {
-      const p = r.p, q = Number(p.quantity) || 0;
-      return {
-        产品名称: p.name || "未命名产品", 类别: p.category || "", 数量: q,
-        进货单价: Number(p.purchasePrice) || 0, 零售价: Number(p.retailPrice) || 0,
-        单件毛利: Math.round(productProfit(p) * 100) / 100,
-        小计零售: Math.round((Number(p.retailPrice) || 0) * q * 100) / 100,
-        本月补货次数: r.tc, 本月补货件数: r.tq, 到期日: p.expiry || ""
-      };
-    });
-    let sheetName = sanitizeSheet(sn);
-    let n = sheetName, k = 2;
-    while (used.has(n)) { n = sheetName + " " + k; k++; }
-    used.add(n);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), n);
-  });
-  saveXlsx(wb, `半月报_${ym}.xlsx`);
-  toast("已导出 Excel（总览 + TOP + 每供应商一个 sheet）");
 }
 
 /* ---------- 数据迁移：旧产品补齐 createdAt / stockLog ---------- */
