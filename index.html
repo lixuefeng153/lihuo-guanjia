@@ -6,6 +6,8 @@
 <title>理货管家 · 供应商包裹产品理货与毛利核算</title>
 <script src="xlsx.full.min.js"></script>
 <script>window.XLSX||document.write('<script src="https://cdn.staticfile.org/xlsx/0.18.5/xlsx.full.min.js"><\/script>')</script>
+<!-- 条码识别引擎：本地优先，避免国内网络下 CDN 加载失败导致相机扫码不可用 -->
+<script src="zxing.min.js"></script>
 <!-- 同步已改为 GitHub 仓库（data/state.json），无需 Supabase -->
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -418,7 +420,7 @@
   <section id="globalScan" class="scan-in scan-global" aria-label="全局扫码入库">
     <div class="scan-in-row">
       <span class="scan-in-label">扫码入库</span>
-      <input type="text" id="globalScanInput" class="scan-in-input" placeholder="扫一维码即可入库，自动匹配同码产品，无需先选包裹" autocomplete="off" />
+      <input type="text" id="scanInput-__global__" class="scan-in-input" placeholder="扫一维码即可入库，自动匹配同码产品，无需先选包裹" autocomplete="off" />
       <button class="btn cam-btn" data-action="scan-camera" data-pkg="__global__" title="相机扫码" aria-label="相机扫码"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>相机</button>
       <button class="btn" data-action="scan-clear" data-pkg="__global__">清空</button>
     </div>
@@ -670,91 +672,217 @@ async function updateSyncUI(ok) {
 }
 
 /* ---------- 相机扫码 ---------- */
-let camStream = null, camDetector = null, camReader = null, camTimer = null, camPid = "__global__", camLast = "";
-function loadScript(src) {
+/* 设计要点：
+   1) 识别引擎本地优先（zxing.min.js 随页面部署），国内网络下也不依赖 CDN；
+   2) 引擎缺失时多源回退，每个源独立超时，避免"永久卡在加载中"；
+   3) 原生 BarcodeDetector 先用 getSupportedFormats 探测真实能力，
+      避免"对象存在但不支持任何格式"导致的静默空转；
+   4) 摄像头约束逐级放宽：后置优先 -> 任意摄像头，兼容桌面设备。 */
+let camStream = null, camDetector = null, camReader = null, camTimer = null;
+let camPid = "__global__", camLast = "", camAlive = false;
+
+const ZXING_SOURCES = [
+  "zxing.min.js",
+  "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js",
+  "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"
+];
+
+function camHint(text) {
+  const h = document.getElementById("camHint");
+  if (!h) return;
+  if (text) { h.textContent = text; h.style.display = "grid"; }
+  else h.style.display = "none";
+}
+
+/* 带超时的脚本加载：CDN 挂起时不会永远卡住 */
+function loadScript(src, timeoutMs) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = src; s.onload = resolve; s.onerror = () => reject(new Error("load fail"));
+    let settled = false;
+    const timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      try { s.remove(); } catch (e) {}
+      reject(new Error("timeout"));
+    }, timeoutMs || 8000);
+    s.src = src;
+    s.async = true;
+    s.onload = function () { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
+    s.onerror = function () {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      try { s.remove(); } catch (e) {}
+      reject(new Error("error"));
+    };
     document.head.appendChild(s);
   });
 }
+function zxingReady() { return !!(window.ZXing && window.ZXing.BrowserMultiFormatReader); }
+async function ensureZxing() {
+  if (zxingReady()) return true;
+  for (let i = 0; i < ZXING_SOURCES.length; i++) {
+    if (!camAlive) return false;
+    try { await loadScript(ZXING_SOURCES[i], 8000); } catch (e) {}
+    if (zxingReady()) return true;
+  }
+  return false;
+}
+
+/* 逐级放宽摄像头约束：后置优先，桌面无后置时回退任意摄像头 */
+async function openCamStream() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    const e = new Error("unsupported"); e.reason = "unsupported"; throw e;
+  }
+  const tries = [
+    { video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+    { video: { facingMode: "environment", width: { ideal: 1280 } }, audio: false },
+    { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+    { video: true, audio: false }
+  ];
+  let last = null;
+  for (let i = 0; i < tries.length; i++) {
+    try { return await navigator.mediaDevices.getUserMedia(tries[i]); }
+    catch (e) { last = e; }
+  }
+  throw last || new Error("no camera");
+}
+
+/* 创建原生 BarcodeDetector；不支持时返回 null */
+async function createDetector() {
+  if (!("BarcodeDetector" in window)) return null;
+  const WANT = ["code_128", "code_39", "code_93", "codabar", "ean_13", "ean_8",
+                "upc_a", "upc_e", "itf", "qr_code", "data_matrix", "pdf417", "aztec"];
+  try {
+    let supported = null;
+    if (typeof BarcodeDetector.getSupportedFormats === "function") {
+      try { supported = await BarcodeDetector.getSupportedFormats(); } catch (e) { supported = null; }
+    }
+    let use = WANT;
+    if (Array.isArray(supported) && supported.length) {
+      use = WANT.filter(function (f) { return supported.indexOf(f) >= 0; });
+      if (!use.length) return null;   // 明确不支持 -> 交给 ZXing，避免静默空转
+    }
+    return new BarcodeDetector({ formats: use });
+  } catch (e) { return null; }
+}
+
 async function openCameraScan(pid) {
   camPid = pid || "__global__";
+  camAlive = true;
   document.getElementById("cameraModal").classList.add("open");
-  const hint = document.getElementById("camHint");
-  hint.style.display = "grid"; hint.textContent = "正在启动摄像头…";
+  camHint("正在启动摄像头…");
   try {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no getUserMedia");
-    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } }, audio: false });
+    camStream = await openCamStream();
+  } catch (e) {
+    camAlive = false;
+    const n = (e && e.name) ? e.name : "";
+    let msg = "无法打开摄像头：";
+    if (n === "NotAllowedError" || n === "SecurityError")
+      msg += "权限被拒绝。请点击地址栏的摄像头图标允许权限后重试。";
+    else if (n === "NotFoundError" || n === "DevicesNotFoundError")
+      msg += "未检测到摄像头设备。";
+    else if (n === "NotReadableError" || n === "TrackStartError")
+      msg += "摄像头被其他程序占用，请关闭后重试。";
+    else if (!window.isSecureContext)
+      msg += "当前不是安全环境。浏览器要求通过 HTTPS 或 localhost 访问才允许使用摄像头。";
+    else
+      msg += ((e && e.message) ? e.message : "未知错误。");
+    camHint(msg);
+    return;
+  }
+  try {
     const video = document.getElementById("camVideo");
     video.srcObject = camStream;
+    // iOS Safari 必须加 playsinline + muted，否则视频会强制全屏且无法自动播放
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
+    video.muted = true;
     await video.play();
-    hint.style.display = "none";
+    camHint("");
     startCamDetect(video);
   } catch (e) {
-    console.error(e);
-    hint.textContent = "无法打开摄像头：请确认已授予摄像头权限，并通过 HTTPS / 本机地址访问（file:// 不支持）。";
+    camHint("视频预览启动失败：" + ((e && e.message) || e));
   }
 }
-function startCamDetect(video) {
+
+async function startCamDetect(video) {
   stopCamDetect();
-  if ("BarcodeDetector" in window) {
-    try {
-      camDetector = new BarcodeDetector({ formats: ["code_128","code_39","code_93","codabar","ean_13","ean_8","upc_a","upc_e","itf","qr_code","data_matrix","pdf417","aztec"] });
-      const tick = async () => {
-        if (!camStream) return;
-        try {
-          const codes = await camDetector.detect(video);
-          if (codes && codes.length && codes[0].rawValue) { onCamCode(codes[0].rawValue); return; }
-        } catch (e) {}
-        camTimer = setTimeout(tick, 160);
-      };
-      tick();
-      return;
-    } catch (e) { camDetector = null; }
+  const det = await createDetector();
+  if (det) {
+    camDetector = det;
+    camHint("");
+    const tick = async function () {
+      if (!camAlive || !camStream) return;
+      try {
+        const codes = await camDetector.detect(video);
+        if (codes && codes.length && codes[0].rawValue) { onCamCode(codes[0].rawValue); return; }
+      } catch (e) {}
+      if (camAlive) camTimer = setTimeout(tick, 150);
+    };
+    tick();
+    return;
   }
-  if (window.ZXing) { startZxing(video); }
-  else {
-    const hint = document.getElementById("camHint");
-    hint.style.display = "grid"; hint.textContent = "正在加载识别引擎…";
-    loadScript("https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js")
-      .then(() => { hint.style.display = "none"; startZxing(video); })
-      .catch(() => { hint.style.display = "grid"; hint.textContent = "识别引擎加载失败，请检查网络，或使用 Chrome / Edge 浏览器（自带实时识别）。"; });
+  // 无原生识别能力 -> 启用 ZXing 引擎
+  camHint("正在加载识别引擎…");
+  const ok = await ensureZxing();
+  if (!camAlive || !camStream) return;
+  if (!ok) {
+    camHint("识别引擎加载失败：本地引擎缺失且网络不可达。请检查网络后重试，或改用扫码枪手动输入。");
+    return;
   }
+  camHint("");
+  startZxing(video);
 }
+
 function startZxing(video) {
   try {
-    camReader = new ZXing.BrowserMultiFormatReader();
-    camReader.decodeFromVideoElement(video, (result, err) => {
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    // 明确列出需要的码制，缩小搜索范围可提升识别速度与准确率；
+    // 排除 MAXICODE / RSS（后者官方标注尚未就绪，会产生控制台警告）。
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.CODE_93,
+      ZXing.BarcodeFormat.CODABAR, ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.ITF,
+      ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.PDF_417,
+      ZXing.BarcodeFormat.AZTEC
+    ]);
+    camReader = new ZXing.BrowserMultiFormatReader(hints);
+    camReader.decodeFromVideoElement(video, function (result, err) {
       if (result && result.getText && result.getText()) onCamCode(result.getText());
     });
   } catch (e) {
-    const hint = document.getElementById("camHint");
-    hint.style.display = "grid"; hint.textContent = "识别引擎启动失败，请使用 Chrome / Edge 浏览器重试。";
+    camHint("识别引擎启动失败：" + ((e && e.message) || e));
   }
 }
+
 function onCamCode(code) {
   const c = String(code || "").trim();
   if (!c || c === camLast) return;
-  camLast = c; setTimeout(() => { camLast = ""; }, 1200); /* 短去抖，避免同一码重复触发 */
+  camLast = c;
+  setTimeout(function () { camLast = ""; }, 1200); /* 短去抖，避免同一码重复触发 */
   const pid = camPid;
   closeCameraScan();
   const inp = document.getElementById("scanInput-" + pid);
   if (inp) inp.value = c;
   doScan(c, pid);
-  toast("相机识别成功：已自动入库");
+  toast("相机识别成功：" + c);
 }
+
 function stopCamDetect() {
   if (camTimer) { clearTimeout(camTimer); camTimer = null; }
   if (camReader) { try { camReader.reset(); } catch (e) {} camReader = null; }
   camDetector = null;
 }
+
 function closeCameraScan() {
+  camAlive = false;
   stopCamDetect();
-  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  if (camStream) { camStream.getTracks().forEach(function (t) { t.stop(); }); camStream = null; }
   const video = document.getElementById("camVideo");
   if (video) video.srcObject = null;
-  document.getElementById("cameraModal").classList.remove("open");
+  const m = document.getElementById("cameraModal");
+  if (m) m.classList.remove("open");
 }
 document.getElementById("cameraModal").addEventListener("click", (e) => { if (e.target && e.target.id === "cameraModal") closeCameraScan(); });
 document.getElementById("cameraClose").addEventListener("click", closeCameraScan);
@@ -1887,9 +2015,14 @@ document.getElementById("storeList").addEventListener("keydown", (e) => {
   }
 });
 
-document.getElementById("globalScanInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); doScan(e.target.value, "__global__"); }
-});
+(function () {
+  // 全局扫码框（id 已统一为 scanInput-__global__，兼容旧的 globalScanInput）
+  const g = document.getElementById("scanInput-__global__") || document.getElementById("globalScanInput");
+  if (!g) return;
+  g.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); doScan(e.target.value, "__global__"); }
+  });
+})();
 
 document.getElementById("reportView").addEventListener("change", (e) => {
   if (e.target && e.target.id === "reportMonth") renderReport(e.target.value);
