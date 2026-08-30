@@ -1192,7 +1192,7 @@ function openProductForm(packageId, id) {
     field("产品名称", "必填", `<input type="text" id="f-name" value="${esc(p ? p.name : "")}" placeholder="如：纯棉T恤" />`, "f-name")
     + field("产品型号", "选填", `<input type="text" id="f-model" value="${esc(p ? p.model : "")}" placeholder="如：TS-2024" />`, "f-model")
     + field("类别", "选填", `<select id="f-cat">${catOptions(p ? p.category : "")}</select>`, "f-cat")
-    + field("材质", "选填", `<input type="text" id="f-material" value="${esc(p ? p.material : "")}" placeholder="如：纯棉 / ABS" />`, "f-material")
+    + field("材质/系列/类别", "选填，三者填其一或组合", `<input type="text" id="f-material" value="${esc(p ? p.material : "")}" placeholder="如：纯棉 / 春季系列 / 文具" />`, "f-material")
     + field("适用年龄", "选填", `<input type="text" id="f-age" value="${esc(p ? p.ageRange : "")}" placeholder="如：3+ / 6-12岁" />`, "f-age")
     + field("到期日", "选填，用于临期提醒（食品等易过期品类建议填）", `<input type="date" id="f-expiry" value="${esc(p && p.expiry ? p.expiry : "")}" />`, "f-expiry")
     + field("一维码", "选填，商品条码", `<input type="text" id="f-barcode" value="${esc(p ? p.barcode : "")}" placeholder="如：6901234567890" />`, "f-barcode")
