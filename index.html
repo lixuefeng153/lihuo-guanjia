@@ -799,7 +799,11 @@ async function openCameraScan(pid) {
     video.muted = true;
     await video.play();
     camHint("");
-    startCamDetect(video);
+    // 不 await：识别循环会在后台持续跑，直到用户关闭
+    startCamDetect(video).catch(function (e) {
+      if (!camAlive) return;
+      camHint("识别启动失败：" + ((e && e.message) || e));
+    });
   } catch (e) {
     camHint("视频预览启动失败：" + ((e && e.message) || e));
   }
@@ -831,10 +835,10 @@ async function startCamDetect(video) {
     return;
   }
   camHint("");
-  startZxing(video);
+  await startZxing(video);
 }
 
-function startZxing(video) {
+async function startZxing(video) {
   try {
     const hints = new Map();
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
@@ -848,10 +852,20 @@ function startZxing(video) {
       ZXing.BarcodeFormat.AZTEC
     ]);
     camReader = new ZXing.BrowserMultiFormatReader(hints);
-    camReader.decodeFromVideoElement(video, function (result, err) {
+    const onResult = function (result, err) {
       if (result && result.getText && result.getText()) onCamCode(result.getText());
-    });
+    };
+    // 关键：ZXing 0.21.3 中 decodeFromVideoElement 已废弃，
+    // 其内部抓帧会得到全黑画面导致永远识别不到；
+    // 必须改用 decodeFromStream，把已打开的 MediaStream 直接交给引擎。
+    if (camStream && typeof camReader.decodeFromStream === "function") {
+      await camReader.decodeFromStream(camStream, video, onResult);
+    } else {
+      camReader.decodeFromVideoElement(video, onResult);
+    }
   } catch (e) {
+    // 用户中途关闭等情况会中断，属正常，不必提示
+    if (!camAlive) return;
     camHint("识别引擎启动失败：" + ((e && e.message) || e));
   }
 }
