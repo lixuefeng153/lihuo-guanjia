@@ -838,18 +838,10 @@ function startNativeDetect(video, det) {
 
 async function startZxing(video) {
   try {
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    // 明确列出需要的码制，缩小搜索范围可提升识别速度与准确率；
-    // 排除 MAXICODE / RSS（后者官方标注尚未就绪，会产生控制台警告）。
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.CODE_93,
-      ZXing.BarcodeFormat.CODABAR, ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
-      ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.ITF,
-      ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.PDF_417,
-      ZXing.BarcodeFormat.AZTEC
-    ]);
-    camReader = new ZXing.BrowserMultiFormatReader(hints);
+    // 使用默认配置（不传 hints）：实测默认 MultiFormatReader 的 5 个解码器
+    // 已覆盖一维码全家 + QR/DataMatrix/Aztec/PDF417，且识别稳定；
+    // 传 TRY_HARDER/POSSIBLE_FORMATS 的组合在部分版本上反而会识别失败。
+    camReader = new ZXing.BrowserMultiFormatReader();
     const onResult = function (result, err) {
       if (result && result.getText && result.getText()) onCamCode(result.getText());
     };
