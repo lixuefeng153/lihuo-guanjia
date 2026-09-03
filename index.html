@@ -9,8 +9,11 @@
 <!-- 条码识别引擎：本地优先，避免国内网络下 CDN 加载失败导致相机扫码不可用 -->
 <script src="zxing.min.js"></script>
 <!-- 同步已改为 GitHub 仓库（data/state.json），无需 Supabase -->
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<!-- 截图/导出图片与 PDF 依赖：本地优先（避免国内网络下 CDN 加载失败导致"导出图片"无响应），失败时回退公网 CDN -->
+<script src="html2canvas.min.js"></script>
+<script>window.html2canvas||document.write('<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"><\/script>')</script>
+<script src="jspdf.umd.min.js"></script>
+<script>window.jspdf||document.write('<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"><\/script>')</script>
 <style>
   :root {
     --bg: #f4f6f9;
