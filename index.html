@@ -1500,7 +1500,9 @@ function buildRows() {
           单件运费: perItemFee(pkg).toFixed(2), 单件成本含运费: productCost(p).toFixed(2),
           单件毛利: profit.toFixed(2), 毛利率: pct(productMargin(p)),
           小计零售: (rp * q).toFixed(2), 小计毛利: (profit * q).toFixed(2),
-          图片: p.image || "", 到期日: p.expiry || "", id_store: store.id, id_pkg: pkg.id, id_prod: p.id
+          /* 图片是 base64 dataURL（数万字符），塞进单元格会超过 Excel 的
+             32,767 字符上限导致整个文件被判损坏打不开；改为有无标记 */
+          图片: p.image ? "有" : "", 到期日: p.expiry || "", id_store: store.id, id_pkg: pkg.id, id_prod: p.id
         });
       });
     });
@@ -1683,12 +1685,14 @@ var NativeXLSX = (function () {
 
   /* ---- XML 生成器 ---- */
   function contentTypesXml(sheetCount) {
+    /* 注意：ECMA-376 规范中属性名是 ContentType（无连字符），
+       写成 Content-Type（HTTP 头写法）Excel 会判定文件格式无效。 */
     var lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
-      '<Default Extension="rels" Content-Type="application/vnd.openxmlformats-package.relationships+xml"/>',
-      '<Default Extension="xml" Content-Type="application/xml"/>'];
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+      '<Default Extension="xml" ContentType="application/xml"/>'];
     for (var i = 1; i <= sheetCount; i++)
-      lines.push('<Override PartName="/xl/worksheets/sheet' + i + '.xml" Content-Type="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>');
-    lines.push('<Override PartName="/xl/workbook.xml" Content-Type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>');
+      lines.push('<Override PartName="/xl/worksheets/sheet' + i + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>');
+    lines.push('<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>');
     lines.push('</Types>');
     return lines.join('\r\n');
   }
@@ -1742,7 +1746,10 @@ var NativeXLSX = (function () {
         if (typeof val === "number" && isFinite(val)) {
           row += '<c r="' + cellRef + '"><v>' + val + '</v></c>';
         } else {
-          row += '<c r="' + cellRef + '" t="inlineStr"><is><t xml:space="preserve">' + escXml(val) + '</t></is></c>';
+          // 防御：Excel 单元格文本上限 32767 字符，超长会损坏整个文件
+          var txt = String(val);
+          if (txt.length > 32767) txt = txt.slice(0, 32767);
+          row += '<c r="' + cellRef + '" t="inlineStr"><is><t xml:space="preserve">' + escXml(txt) + '</t></is></c>';
         }
       }
       row += '</row>';
@@ -1847,7 +1854,9 @@ async function importFile(file) {
       let prod = r["id_prod"] ? state.products.find(p => p.id === r["id_prod"]) : null;
       const data = {
         name: prodName, purchasePrice: num(r["进货单价"]), retailPrice: num(r["零售价"]),
-        quantity: Math.max(1, Math.floor(num(r["数量"])) || 1), image: r["图片"] || "", imageName: "",
+        quantity: Math.max(1, Math.floor(num(r["数量"])) || 1),
+        // 导出时"图片"列已改为有无标记，导入时只接受 base64 图片数据，其余一律忽略
+        image: /^data:image\//.test(String(r["图片"] || "")) ? String(r["图片"]) : "", imageName: "",
         model: (r["产品型号"] || "").toString().trim(), category: (r["类别"] || "").toString().trim(),
         material: (r["材质"] || "").toString().trim(), ageRange: (r["适用年龄"] || "").toString().trim(),
         barcode: (r["一维码"] || "").toString().trim(), expiry: (r["到期日"] || "").toString().trim()
