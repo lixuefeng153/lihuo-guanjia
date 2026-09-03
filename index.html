@@ -797,45 +797,43 @@ async function openCameraScan(pid) {
     video.setAttribute("playsinline", "");
     video.setAttribute("webkit-playsinline", "");
     video.muted = true;
-    await video.play();
+    // 先播放，让取景画面立刻显示出来（ZXing 路径会在接入引擎前重新暂停一次）
+    try { await video.play(); } catch (e) {}
     camHint("");
-    // 不 await：识别循环会在后台持续跑，直到用户关闭
-    startCamDetect(video).catch(function (e) {
-      if (!camAlive) return;
-      camHint("识别启动失败：" + ((e && e.message) || e));
-    });
+
+    const det = await createDetector();
+    if (det) {
+      startNativeDetect(video, det);
+      return;
+    }
+    camHint("正在加载识别引擎…");
+    const ok = await ensureZxing();
+    if (!camAlive || !camStream) return;
+    if (!ok) {
+      camHint("识别引擎加载失败：本地引擎缺失且网络不可达。请检查网络后重试，或改用扫码枪手动输入。");
+      return;
+    }
+    camHint("");
+    await startZxing(video);
   } catch (e) {
     camHint("视频预览启动失败：" + ((e && e.message) || e));
   }
 }
 
-async function startCamDetect(video) {
+/* 原生 BarcodeDetector 识别循环（video 由页面自行播放） */
+function startNativeDetect(video, det) {
   stopCamDetect();
-  const det = await createDetector();
-  if (det) {
-    camDetector = det;
-    camHint("");
-    const tick = async function () {
-      if (!camAlive || !camStream) return;
-      try {
-        const codes = await camDetector.detect(video);
-        if (codes && codes.length && codes[0].rawValue) { onCamCode(codes[0].rawValue); return; }
-      } catch (e) {}
-      if (camAlive) camTimer = setTimeout(tick, 150);
-    };
-    tick();
-    return;
-  }
-  // 无原生识别能力 -> 启用 ZXing 引擎
-  camHint("正在加载识别引擎…");
-  const ok = await ensureZxing();
-  if (!camAlive || !camStream) return;
-  if (!ok) {
-    camHint("识别引擎加载失败：本地引擎缺失且网络不可达。请检查网络后重试，或改用扫码枪手动输入。");
-    return;
-  }
+  camDetector = det;
   camHint("");
-  await startZxing(video);
+  const tick = async function () {
+    if (!camAlive || !camStream) return;
+    try {
+      const codes = await camDetector.detect(video);
+      if (codes && codes.length && codes[0].rawValue) { onCamCode(codes[0].rawValue); return; }
+    } catch (e) {}
+    if (camAlive) camTimer = setTimeout(tick, 150);
+  };
+  tick();
 }
 
 async function startZxing(video) {
@@ -859,6 +857,8 @@ async function startZxing(video) {
     // 其内部抓帧会得到全黑画面导致永远识别不到；
     // 必须改用 decodeFromStream，把已打开的 MediaStream 直接交给引擎。
     if (camStream && typeof camReader.decodeFromStream === "function") {
+      // 保险：先暂停，确保 ZXing 内部 play() 能触发 playing 事件从而启动解码循环
+      try { video.pause(); } catch (e) {}
       await camReader.decodeFromStream(camStream, video, onResult);
     } else {
       camReader.decodeFromVideoElement(video, onResult);
