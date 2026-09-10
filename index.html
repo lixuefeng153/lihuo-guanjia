@@ -3680,7 +3680,7 @@ function dedupImages() {
    普通刷新不会回源，于是"部署了新版但用户看不到"，只有全新浏览器才正常。
    解法：仓库放一个 version.json（每次部署递增），页面启动时无缓存拉取它，
    与自身内置版本号比对；不一致就用带新版本号的 URL 重载（URL 变化即绕过缓存）。 */
-const APP_VERSION = "1789034225";   // 部署时由 deploy_github_pages.py 注入真实版本号
+const APP_VERSION = "1789034363";   // 部署时由 deploy_github_pages.py 注入真实版本号
 let _lastVerCheck = 0;
 async function checkAppUpdate(force) {
   /* 本地直接打开 index.html 时这里是占位符（非纯数字），跳过检查以免无限重载 */
@@ -3694,6 +3694,13 @@ async function checkAppUpdate(force) {
     const j = await r.json();
     const v = String((j && j.v) || "").trim();
     if (v && v !== String(APP_VERSION)) {
+      /* 防死循环：CDN 各节点缓存可能短暂不一致（version.json 还是旧的、页面是新的），
+         若不加保护会反复重载把页面卡死。同一次会话对同一个目标版本只重载一次。 */
+      const key = "lh_ver_tried_" + v;
+      let tried = "";
+      try { tried = sessionStorage.getItem(key) || ""; } catch (e) {}
+      if (tried) return false;
+      try { sessionStorage.setItem(key, "1"); } catch (e) {}
       location.replace(location.pathname + "?v=" + encodeURIComponent(v));
       return true;
     }
