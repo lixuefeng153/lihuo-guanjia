@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- 尽量让浏览器每次都回源校验，避免停留在旧版页面（配合下面的版本号自动更新） -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>理货管家 · 供应商包裹产品理货与毛利核算</title>
 <script src="xlsx.full.min.js"></script>
 <script>window.XLSX||document.write('<script src="https://cdn.staticfile.org/xlsx/0.18.5/xlsx.full.min.js"><\/script>')</script>
@@ -660,7 +664,8 @@ function splitImages(st) {
     delete c.image;
     products[i] = c;
   }
-  return { core: { stores: st.stores, packages: st.packages, products: products }, imgs: imgs };
+  /* updatedAt 随主数据一起存，用于多设备间判断"谁的数据更新" */
+  return { core: { stores: st.stores, packages: st.packages, products: products, updatedAt: st.updatedAt || Date.now() }, imgs: imgs };
 }
 /* 把图片表回填进主数据，还原成内存中带图的状态 */
 function mergeImages(core, imgMap) {
@@ -673,7 +678,7 @@ function mergeImages(core, imgMap) {
     c.image = data; c.imageKey = key;
     return c;
   });
-  return { stores: core.stores || [], packages: core.packages || [], products: products };
+  return { stores: core.stores || [], packages: core.packages || [], products: products, updatedAt: core.updatedAt || 0 };
 }
 
 async function loadLocal() {
@@ -684,8 +689,11 @@ async function loadLocal() {
   if (!core) return { stores: [], packages: [], products: [] };
   return mergeImages(core, imgMap);
 }
-async function saveLocal() {
+async function saveLocal(ts) {
   const db = await openDBCached();
+  /* 记录本次数据的时间戳，多设备同步时用它判断谁的数据更新；
+     传入 ts 表示"这是从云端拉回来的数据"，保持与云端一致，避免误判本地更新而回推 */
+  state.updatedAt = ts || Date.now();
   const { core, imgs } = splitImages(state);
   /* 1) 先写主数据（小），这一步完成即视为"已保存" */
   await new Promise((res, rej) => {
@@ -2716,11 +2724,10 @@ document.addEventListener("click", (e) => {
     case "sync-now":
       (async () => {
         if (!ghReady) { toast("请先点「连接同步」并配置 GitHub 同步"); return; }
-        const remote = await loadRemote();
-        const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
-        if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); renderAll(); }
+        const pulled = await pullRemoteIfNewer();
+        if (pulled) renderAll();
         const ok = await flushSync(true);
-        toast(ok ? "同步完成（图片存本机，不随云同步）" : "同步失败，检查网络/令牌");
+        toast(ok ? (pulled ? "已拉取云端最新数据并同步完成" : "同步完成（图片存本机，不随云同步）") : "同步失败，检查网络/令牌");
       })();
       break;
     case "scan-clear": {
@@ -3668,15 +3675,55 @@ function dedupImages() {
   return changed;
 }
 
+/* ---------- 版本自动更新 ----------
+   GitHub Pages 会给 index.html 发缓存头，Edge 等浏览器会长期保留旧页面，
+   普通刷新不会回源，于是"部署了新版但用户看不到"，只有全新浏览器才正常。
+   解法：仓库放一个 version.json（每次部署递增），页面启动时无缓存拉取它，
+   与自身内置版本号比对；不一致就用带新版本号的 URL 重载（URL 变化即绕过缓存）。 */
+const APP_VERSION = "1789034101";   // 部署时由 deploy_github_pages.py 注入真实版本号
+let _lastVerCheck = 0;
+async function checkAppUpdate(force) {
+  /* 本地直接打开 index.html 时这里是占位符（非纯数字），跳过检查以免无限重载 */
+  if (!/^\d+$/.test(String(APP_VERSION))) return false;
+  const now = Date.now();
+  if (!force && now - _lastVerCheck < 30000) return false;   // 30 秒内不重复请求
+  _lastVerCheck = now;
+  try {
+    const r = await fetch("version.json?t=" + now, { cache: "no-store" });
+    if (!r.ok) return false;
+    const j = await r.json();
+    const v = String((j && j.v) || "").trim();
+    if (v && v !== String(APP_VERSION)) {
+      location.replace(location.pathname + "?v=" + encodeURIComponent(v));
+      return true;
+    }
+  } catch (e) { /* 取不到版本号就按当前版本继续用，不影响使用 */ }
+  return false;
+}
+
 /* ---------- 启动 ---------- */
+/* 云端数据同步：谁的时间戳新就用谁的。
+   原实现只在「本地为空」时才拉云端，导致换设备 / 换浏览器后看不到别处录入的数据。 */
+async function pullRemoteIfNewer() {
+  if (!ghReady) return false;
+  const remote = await loadRemote();
+  const rd = remote && remote.data;
+  if (!rd || !Array.isArray(rd.products)) return false;
+  const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
+  const lu = Number(state.updatedAt) || 0;
+  const ru = Number(rd.updatedAt) || 0;
+  if (localEmpty || ru > lu) {
+    state = rd;
+    await saveLocal(rd.updatedAt);   // 保持与云端同一时间戳，避免误判为本地更新而回推
+    return true;
+  }
+  return false;
+}
 async function boot() {
   state = await loadLocal();
+  let pulled = false;
   if (ghCfg.owner && ghCfg.token) {
-    if (ghInit()) {
-      const remote = await loadRemote();
-      const localEmpty = !(state.stores.length || state.packages.length || state.products.length);
-      if (remote && remote.data && Array.isArray(remote.data.products) && localEmpty) { state = remote.data; await saveLocal(); }
-    }
+    if (ghInit()) { pulled = await pullRemoteIfNewer(); }
   }
   migrateState();
   if (dedupImages()) { state.products.forEach(markImageDirty); saveLocal(); }
@@ -3684,8 +3731,18 @@ async function boot() {
   setScanMode(scanMode);        // 恢复上次的入库 / 出库模式
   setNavActive("home");
   updateSyncUI();
+  if (pulled) toast("已从云端同步最新数据");
+  if (ghReady) scheduleSync();  // 本地更新则回推，保证多设备一致
 }
-boot();
+/* 先查版本（有新版就重载，不再渲染旧页面），再启动 */
+(async function () {
+  if (await checkAppUpdate(true)) return;
+  await boot();
+})();
+/* 切回页面时也查一次：长期开着标签页的用户回来即可拿到新版 */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkAppUpdate(false);
+});
 </script>
 </body>
 </html>
